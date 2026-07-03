@@ -1,4 +1,4 @@
-# Temporal PDF Legal documents Processing & AI Contract Review System
+# Agentic Legal Rag System 
 
 A production-grade workflow orchestration system built with **Temporal** and **FastAPI** that automates PDF extraction, AI-powered contract analysis, and human-in-the-loop review processes.
 
