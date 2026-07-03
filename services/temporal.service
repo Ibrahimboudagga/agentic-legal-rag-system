@@ -1,0 +1,50 @@
+[Unit]
+Description=Temporal Workflow Engine (Docker Compose)
+Documentation=https://docs.temporal.io
+# Must have Docker running first
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Where the docker-compose.yml lives
+WorkingDirectory="/tmp/docker-desktop-root/run/desktop/mnt/host/c/Users/Bouda/OneDrive/Desktop/New folder/temporalworkflow/samples-server/compose"
+
+# Load .env variables into the service environment
+EnvironmentFile="/tmp/docker-desktop-root/run/desktop/mnt/host/c/Users/Bouda/OneDrive/Desktop/New folder/temporalworkflow/samples-server/compose/.env"
+
+# Pre-start: ensure data directory exists
+ExecStartPre=-/bin/mkdir -p /var/lib/docker/volumes/temporal_postgres-data
+
+# Start the full stack; --wait blocks until all healthchecks pass
+ExecStart=/usr/bin/docker compose -f "/tmp/docker-desktop-root/run/desktop/mnt/host/c/Users/Bouda/OneDrive/Desktop/New folder/temporalworkflow/samples-server/compose/docker-compose-postgres.yml" up -d
+
+# Stop the full stack cleanly
+ExecStop=/usr/bin/docker compose -f "/tmp/docker-desktop-root/run/desktop/mnt/host/c/Users/Bouda/OneDrive/Desktop/New folder/temporalworkflow/samples-server/compose/docker-compose-postgres.yml" down
+
+# Reload = restart the containers (e.g., after config change)
+ExecReload=/usr/bin/docker compose -f "/tmp/docker-desktop-root/run/desktop/mnt/host/c/Users/Bouda/OneDrive/Desktop/New folder/temporalworkflow/samples-server/compose/docker-compose-postgres.yml" restart
+
+# Restart this service itself if it crashes (not the containers — they have their own restart policy)
+Restart=on-failure
+RestartSec=10s
+
+# Give containers enough time to start/stop
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+# File descriptor limits (important for high-concurrency Temporal)
+LimitNOFILE=65536
+LimitNPROC=8192
+
+# Send logs to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=temporal
+
+[Install]
+# Start on normal multi-user boot
+WantedBy=multi-user.target

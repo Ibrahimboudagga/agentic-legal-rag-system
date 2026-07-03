@@ -1,0 +1,32 @@
+name: Build extensibility examples
+
+on:
+  pull_request:
+    paths:
+      - 'extensibility/**'
+
+permissions:
+  contents: read
+
+jobs:
+  extensibility-test:
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Print build information
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          REF: ${{ github.ref }}
+          OS: ${{ matrix.os }}
+        run: echo "head_ref=$HEAD_REF ref=$REF os=$OS"
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: extensibility/go.mod
+      - name: build and test
+        working-directory: extensibility
+        run: go test -count=1 -timeout 120s ./...

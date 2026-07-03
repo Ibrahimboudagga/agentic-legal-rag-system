@@ -1,0 +1,317 @@
+name: Test compose examples
+
+on:
+  pull_request:
+    paths:
+      - 'compose/**'
+      - '.github/workflows/compose.yaml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'compose/**'
+      - '.github/workflows/compose.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  lint-actions:
+    name: Lint GitHub Actions workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Lint actions
+        run: |
+          echo "::add-matcher::.github/actionlint-matcher.json"
+          bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+        shell: bash
+
+  compose-test:
+    name: Test ${{ matrix.compose-file }}
+    needs: lint-actions
+    strategy:
+      fail-fast: false
+      matrix:
+        compose-file:
+          - docker-compose.yml
+          - docker-compose-postgres.yml
+          - docker-compose-mysql.yml
+          - docker-compose-mysql-es.yml
+          - docker-compose-cass-es.yml
+          - docker-compose-postgres-opensearch.yml
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Print build information
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          REF: ${{ github.ref }}
+          COMPOSE_FILE: ${{ matrix.compose-file }}
+        run: echo "head_ref=$HEAD_REF ref=$REF compose=$COMPOSE_FILE"
+
+      - uses: actions/checkout@v6
+
+      - name: Start compose stack
+        working-directory: compose
+        run: docker compose -f ${{ matrix.compose-file }} up -d
+
+      - name: Run validation
+        working-directory: compose
+        run: |
+          docker compose -f ${{ matrix.compose-file }} -f docker-compose-validate.yml up temporal-validate --exit-code-from temporal-validate
+
+      - name: Print all logs on failure
+        if: failure()
+        working-directory: compose
+        run: |
+          echo "=== Printing all container logs ==="
+          docker compose -f ${{ matrix.compose-file }} ps -a
+          docker compose -f ${{ matrix.compose-file }} logs
+
+      - name: Cleanup
+        if: always()
+        working-directory: compose
+        run: docker compose -f ${{ matrix.compose-file }} -f docker-compose-validate.yml down -v
+
+  compose-dev-test:
+    name: Test docker-compose-dev.yml
+    needs: lint-actions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Start dev compose stack
+        working-directory: compose
+        run: docker compose -f docker-compose-dev.yml up -d
+
+      - name: Wait for Temporal to be ready
+        working-directory: compose
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose -f docker-compose-dev.yml exec temporal temporal operator cluster health 2>/dev/null; then
+              echo "Temporal is ready"
+              exit 0
+            fi
+            echo "Waiting for Temporal... ($i/30)"
+            sleep 2
+          done
+          echo "Temporal failed to become ready"
+          exit 1
+
+      - name: Validate Temporal is functional
+        working-directory: compose
+        run: |
+          docker compose -f docker-compose-dev.yml exec temporal temporal operator namespace describe default
+          docker compose -f docker-compose-dev.yml exec temporal temporal workflow start \
+            --workflow-id validation-test \
+            --type NonExistentWorkflow \
+            --task-queue validation-queue \
+            --execution-timeout 10s
+          docker compose -f docker-compose-dev.yml exec temporal temporal workflow terminate \
+            --workflow-id validation-test \
+            --reason "Validation complete" || true
+
+      - name: Print all logs on failure
+        if: failure()
+        working-directory: compose
+        run: |
+          echo "=== Printing all container logs ==="
+          docker compose -f docker-compose-dev.yml ps -a
+          docker compose -f docker-compose-dev.yml logs
+
+      - name: Cleanup
+        if: always()
+        working-directory: compose
+        run: docker compose -f docker-compose-dev.yml down -v
+
+  compose-tls-test:
+    name: Test docker-compose-tls.yml
+    needs: lint-actions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Print build information
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          REF: ${{ github.ref }}
+        run: echo "head_ref=$HEAD_REF ref=$REF compose=docker-compose-tls.yml"
+
+      - uses: actions/checkout@v6
+
+      - name: Generate TLS certificates
+        working-directory: compose
+        run: |
+          docker build -t temporal_tls:test -f tls/Dockerfile.tls .
+          mkdir -p .pki
+          docker run --rm -v temporal_tls_pki:/pki -v "${PWD}"/.pki:/pki-out temporal_tls:test
+
+      - name: Build TLS images
+        working-directory: compose
+        run: COMPOSE_PROJECT_NAME=tls_test docker compose -f docker-compose-tls.yml build --no-cache
+
+      - name: Start TLS compose stack
+        working-directory: compose
+        run: COMPOSE_PROJECT_NAME=tls_test docker compose -f docker-compose-tls.yml up -d
+
+      - name: Run validation
+        working-directory: compose
+        run: |
+          COMPOSE_PROJECT_NAME=tls_test docker compose -f docker-compose-tls.yml -f docker-compose-validate.yml up temporal-validate --exit-code-from temporal-validate
+
+      - name: Print all logs on failure
+        if: failure()
+        working-directory: compose
+        run: |
+          echo "=== Printing all container logs ==="
+          COMPOSE_PROJECT_NAME=tls_test docker compose -f docker-compose-tls.yml ps -a
+          COMPOSE_PROJECT_NAME=tls_test docker compose -f docker-compose-tls.yml logs
+
+      - name: Cleanup
+        if: always()
+        working-directory: compose
+        run: |
+          COMPOSE_PROJECT_NAME=tls_test docker compose -f docker-compose-tls.yml -f docker-compose-validate.yml down -v
+          docker volume rm temporal_tls_pki || true
+          rm -rf .pki
+
+  compose-multirole-test:
+    name: Test docker-compose-multirole.yaml
+    needs: lint-actions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Print build information
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          REF: ${{ github.ref }}
+        run: echo "head_ref=$HEAD_REF ref=$REF compose=docker-compose-multirole.yaml"
+
+      - uses: actions/checkout@v6
+
+      - name: Install loki Docker plugin
+        run: docker plugin install grafana/loki-docker-driver:latest --alias loki --grant-all-permissions
+
+      - name: Start multirole compose stack
+        working-directory: compose
+        run: docker compose -f docker-compose-multirole.yaml up -d
+
+      - name: Run validation
+        working-directory: compose
+        run: |
+          docker compose -f docker-compose-multirole.yaml -f docker-compose-validate-multirole.yml up temporal-validate --exit-code-from temporal-validate
+
+      - name: Verify temporal services are running
+        working-directory: compose
+        run: |
+          docker compose -f docker-compose-multirole.yaml ps temporal-history temporal-frontend temporal-matching temporal-worker
+
+      - name: Verify each container runs only its expected service
+        run: |
+          port_listening() {
+            container=$1
+            port=$2
+            hex_port=$(printf '%04X' "$port")
+            docker exec "$container" cat /proc/net/tcp /proc/net/tcp6 2>/dev/null \
+              | awk '{print $2}' | grep -qi ":${hex_port}$"
+          }
+
+          check_expected_port() {
+            container=$1
+            port=$2
+            if ! port_listening "$container" "$port"; then
+              echo "FAIL: $container is not listening on expected port $port"
+              docker exec "$container" cat /proc/net/tcp /proc/net/tcp6 2>/dev/null || true
+              exit 1
+            fi
+            echo "OK: $container is listening on port $port"
+          }
+
+          check_no_port() {
+            container=$1
+            port=$2
+            if port_listening "$container" "$port"; then
+              echo "FAIL: $container is unexpectedly listening on port $port"
+              exit 1
+            fi
+            echo "OK: $container is not listening on port $port"
+          }
+
+          # history: port 7234 only
+          check_expected_port temporal-history 7234
+          check_no_port temporal-history 7235
+          check_no_port temporal-history 7237
+          check_no_port temporal-history 7236
+
+          # matching: port 7235 only
+          check_expected_port temporal-matching 7235
+          check_no_port temporal-matching 7234
+          check_no_port temporal-matching 7237
+          check_no_port temporal-matching 7236
+
+          # frontend: port 7237 (FRONTEND_GRPC_PORT=7237)
+          check_expected_port temporal-frontend 7237
+          check_no_port temporal-frontend 7234
+          check_no_port temporal-frontend 7235
+
+          # frontend2: port 7236 (FRONTEND_GRPC_PORT=7236)
+          check_expected_port temporal-frontend2 7236
+          check_no_port temporal-frontend2 7234
+          check_no_port temporal-frontend2 7235
+
+          # worker: should not bind any of the other service ports
+          check_no_port temporal-worker 7234
+          check_no_port temporal-worker 7235
+          check_no_port temporal-worker 7237
+          check_no_port temporal-worker 7236
+
+      - name: Verify ringpop membership ports are reachable on temporal-network
+        run: |
+          port_listening() {
+            container=$1
+            port=$2
+            hex_port=$(printf '%04X' "$port")
+            docker exec "$container" cat /proc/net/tcp /proc/net/tcp6 2>/dev/null \
+              | awk '{print $2}' | grep -qi ":${hex_port}$"
+          }
+
+          # Check membership ports are listening inside each container
+          for entry in "temporal-history:6934" "temporal-matching:6935"; do
+            container=${entry%:*}
+            port=${entry#*:}
+            if ! port_listening "$container" "$port"; then
+              echo "FAIL: $container is not listening on membership port $port"
+              docker exec "$container" cat /proc/net/tcp /proc/net/tcp6 2>/dev/null || true
+              exit 1
+            fi
+            echo "OK: $container is listening on membership port $port"
+          done
+
+          # Verify membership ports are reachable from within temporal-network
+          for entry in "temporal-history:6934" "temporal-matching:6935"; do
+            target=${entry%:*}
+            port=${entry#*:}
+            if ! docker exec temporal-admin-tools nc -zw3 "$target" "$port"; then
+              echo "FAIL: $target:$port is not reachable on temporal-network"
+              exit 1
+            fi
+            echo "OK: $target:$port is reachable on temporal-network"
+          done
+
+      - name: Print all logs on failure
+        if: failure()
+        working-directory: compose
+        run: |
+          echo "=== Printing all container logs ==="
+          docker compose -f docker-compose-multirole.yaml ps -a
+          docker compose -f docker-compose-multirole.yaml logs
+
+      - name: Cleanup
+        if: always()
+        working-directory: compose
+        run: docker compose -f docker-compose-multirole.yaml -f docker-compose-validate-multirole.yml down -v

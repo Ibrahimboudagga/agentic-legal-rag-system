@@ -1,0 +1,3 @@
+boto3==1.43.32
+pymupdf4llm==1.27.2.3
+python-dotenv==1.2.2
