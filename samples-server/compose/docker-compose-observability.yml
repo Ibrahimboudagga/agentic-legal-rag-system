@@ -1,0 +1,184 @@
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────
+  postgresql:
+    image: postgres:${POSTGRESQL_VERSION}
+    container_name: temporal-postgresql
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_USER: temporal
+    networks:
+      - temporal-network
+    volumes:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  # ── Temporal Admin Tools ───────────────────────────────────────
+  temporal-admin-tools:
+    image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION}
+    container_name: temporal-admin-tools
+    restart: on-failure:6
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+      - SQL_PASSWORD=temporal
+    networks:
+      - temporal-network
+    volumes:
+      - ./scripts:/scripts
+    entrypoint: ["/bin/sh"]
+    command: /scripts/setup-postgres.sh
+
+  # ── Temporal Server ────────────────────────────────────────────
+  temporal:
+    image: temporalio/server:${TEMPORAL_VERSION}
+    container_name: temporal
+    depends_on:
+      temporal-admin-tools:
+        condition: service_completed_successfully
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+      - BIND_ON_IP=0.0.0.0
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - PROMETHEUS_ENDPOINT=0.0.0.0:8233
+    networks:
+      - temporal-network
+    ports:
+      - '7233:7233'
+      - '8233:8233'
+    volumes:
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7233"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 60
+
+  # ── Temporal Namespace Creation ────────────────────────────────
+  temporal-create-namespace:
+    image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION}
+    container_name: temporal-create-namespace
+    restart: on-failure:5
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - DEFAULT_NAMESPACE=default
+    networks:
+      - temporal-network
+    volumes:
+      - ./scripts:/scripts
+    entrypoint: ["/bin/sh"]
+    command: /scripts/create-namespace.sh
+
+  # ── Temporal UI ────────────────────────────────────────────────
+  temporal-ui:
+    container_name: temporal-ui
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+    image: temporalio/ui:${TEMPORAL_UI_VERSION}
+    networks:
+      - temporal-network
+    ports:
+      - 8080:8080
+
+  # ── OpenTelemetry Collector ────────────────────────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector:0.47.0
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./deployment/otel/otel-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"    # OTLP gRPC receiver
+      - "4318:4318"    # OTLP HTTP receiver
+      - "8889:8889"    # Prometheus metrics export
+      - "13133:13133"  # Health check (zpages)
+    depends_on:
+      - jaeger-all-in-one
+    networks:
+      - temporal-network
+
+  # ── Jaeger (Distributed Tracing) ──────────────────────────────
+  jaeger-all-in-one:
+    image: jaegertracing/all-in-one:1.37
+    container_name: jaeger-all-in-one
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # Jaeger HTTP collector
+      - "14250:14250"  # Jaeger gRPC collector
+    networks:
+      - temporal-network
+
+  # ── Prometheus (Metrics) ──────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.37.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deployment/prometheus/config.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - temporal
+      - otel-collector
+    networks:
+      - temporal-network
+
+  # ── Loki (Log Aggregation) ────────────────────────────────────
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./deployment/loki/local-config.yaml:/etc/loki/local-config.yaml
+    networks:
+      - temporal-network
+
+  # ── Grafana (Dashboards) ──────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: grafana
+    environment:
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    ports:
+      - "8085:3000"
+    volumes:
+      - ./deployment/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./deployment/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./deployment/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - temporal-network
+
+networks:
+  temporal-network:
+    driver: bridge
+    name: temporal-network

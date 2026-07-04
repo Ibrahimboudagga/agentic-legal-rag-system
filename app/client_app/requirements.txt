@@ -1,4 +1,7 @@
 fastapi==0.115.12
 uvicorn==0.34.3
 python-dotenv==1.2.2
-temporalio==1.29.0
+temporalio>=1.29.0
+structlog>=24.1.0
+prometheus-client>=0.21.0
+python-logging-loki>=0.3.2

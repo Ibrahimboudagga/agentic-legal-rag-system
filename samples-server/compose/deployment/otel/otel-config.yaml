@@ -8,10 +8,14 @@ receivers:
   otlp:
     protocols:
       grpc:
+        endpoint: 0.0.0.0:4317
       http:
+        endpoint: 0.0.0.0:4318
 
 processors:
   batch:
+    timeout: 1s
+    send_batch_size: 1024
 
 exporters:
   logging:
@@ -20,11 +24,20 @@ exporters:
     endpoint: jaeger-all-in-one:14250
     tls:
       insecure: true
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: "temporal_app"
+    const_labels:
+      source: "otel-collector"
 
 service:
   pipelines:
     traces:
-      receivers: [ otlp ]
-      processors: [ batch ]
-      exporters: [ jaeger ]
-  extensions: [ memory_ballast, zpages ]
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [jaeger, logging]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+  extensions: [memory_ballast, zpages]
