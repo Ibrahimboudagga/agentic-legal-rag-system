@@ -1,10 +1,13 @@
 import asyncio
 import math
 import os
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import boto3
 import fitz

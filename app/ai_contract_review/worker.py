@@ -2,6 +2,8 @@ import asyncio
 import os
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
 from dotenv import load_dotenv
 from prometheus_client import start_http_server
 from temporalio.client import Client
@@ -21,8 +23,6 @@ TEMPORAL_NAMESPACE = os.getenv("TEMPORAL_NAMESPACE")
 TEMPORAL_TASK_QUEUE = os.getenv(
     "TEMPORAL_CONTRACT_REVIEW_TASK_QUEUE", "contract-review-queue"
 )
-
-sys.path.insert(0, os.path.dirname(__file__))
 from activities import call_llm, extract_pdf
 from child_worker import pdfsummaryworkflow
 from parent_worker import ContractReviewerWorkflow

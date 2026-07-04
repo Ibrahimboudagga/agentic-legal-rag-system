@@ -10,7 +10,7 @@ from prometheus_client import start_http_server
 from pydantic import BaseModel
 from temporalio.client import Client, WorkflowExecutionStatus as WES
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 load_dotenv()
 
 from shared.observability.logging import (

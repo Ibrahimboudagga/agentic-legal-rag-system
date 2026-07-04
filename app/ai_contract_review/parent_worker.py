@@ -1,6 +1,9 @@
 import asyncio
 import json
-import time
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from dataclasses import dataclass
 from datetime import timedelta
@@ -11,23 +14,24 @@ from temporalio import workflow
 from temporalio.exceptions import ApplicationError
 from temporalio.workflow import ParentClosePolicy
 
-from shared.observability.logging import (
-    get_logger,
-    task_queue_var,
-    workflow_id_var,
-)
-from shared.observability.metrics import (
-    active_workflows,
-    human_review_approved_total,
-    human_review_revised_total,
-    human_review_started_total,
-    human_review_timeout_total,
-    human_review_wait_seconds,
-    workflow_completed_total,
-    workflow_duration_seconds,
-    workflow_failed_total,
-    workflow_started_total,
-)
+with workflow.unsafe.imports_passed_through():
+    from shared.observability.logging import (
+        get_logger,
+        task_queue_var,
+        workflow_id_var,
+    )
+    from shared.observability.metrics import (
+        active_workflows,
+        human_review_approved_total,
+        human_review_revised_total,
+        human_review_started_total,
+        human_review_timeout_total,
+        human_review_wait_seconds,
+        workflow_completed_total,
+        workflow_duration_seconds,
+        workflow_failed_total,
+        workflow_started_total,
+    )
 
 with workflow.unsafe.imports_passed_through():
     from activities import call_llm, calllminput
@@ -110,17 +114,18 @@ class ContractReviewerWorkflow:
     async def run(
         self, param: ContractReviewerWorkflowinput
     ) -> ContractReviewerWorkflowoutput:
-        self._start_time = time.time()
+        self._start_time = workflow.now().timestamp()
         info = workflow.info()
 
         workflow_id_var.set(info.workflow_id)
         task_queue_var.set(info.task_queue)
 
-        workflow_started_total.labels(
-            workflow_type="ContractReviewerWorkflow",
-            task_queue=info.task_queue,
-        ).inc()
-        active_workflows.labels(workflow_type="ContractReviewerWorkflow").inc()
+        with workflow.unsafe.sandbox_unrestricted():
+            workflow_started_total.labels(
+                workflow_type="ContractReviewerWorkflow",
+                task_queue=info.task_queue,
+            ).inc()
+            active_workflows.labels(workflow_type="ContractReviewerWorkflow").inc()
 
         log.info(
             "workflow_started",
@@ -132,14 +137,15 @@ class ContractReviewerWorkflow:
         try:
             result = await self._run_inner(param)
 
-            duration = time.time() - self._start_time
-            workflow_completed_total.labels(
-                workflow_type="ContractReviewerWorkflow",
-                task_queue=info.task_queue,
-            ).inc()
-            workflow_duration_seconds.labels(
-                workflow_type="ContractReviewerWorkflow"
-            ).observe(duration)
+            duration = workflow.now().timestamp() - self._start_time
+            with workflow.unsafe.sandbox_unrestricted():
+                workflow_completed_total.labels(
+                    workflow_type="ContractReviewerWorkflow",
+                    task_queue=info.task_queue,
+                ).inc()
+                workflow_duration_seconds.labels(
+                    workflow_type="ContractReviewerWorkflow"
+                ).observe(duration)
 
             log.info(
                 "workflow_completed",
@@ -151,15 +157,16 @@ class ContractReviewerWorkflow:
             return result
 
         except Exception as exc:
-            duration = time.time() - self._start_time
-            workflow_failed_total.labels(
-                workflow_type="ContractReviewerWorkflow",
-                task_queue=info.task_queue,
-                error_type=type(exc).__name__,
-            ).inc()
-            workflow_duration_seconds.labels(
-                workflow_type="ContractReviewerWorkflow"
-            ).observe(duration)
+            duration = workflow.now().timestamp() - self._start_time
+            with workflow.unsafe.sandbox_unrestricted():
+                workflow_failed_total.labels(
+                    workflow_type="ContractReviewerWorkflow",
+                    task_queue=info.task_queue,
+                    error_type=type(exc).__name__,
+                ).inc()
+                workflow_duration_seconds.labels(
+                    workflow_type="ContractReviewerWorkflow"
+                ).observe(duration)
 
             log.error(
                 "workflow_failed",
@@ -170,7 +177,8 @@ class ContractReviewerWorkflow:
             raise
 
         finally:
-            active_workflows.labels(workflow_type="ContractReviewerWorkflow").dec()
+            with workflow.unsafe.sandbox_unrestricted():
+                active_workflows.labels(workflow_type="ContractReviewerWorkflow").dec()
 
     async def _run_inner(
         self, param: ContractReviewerWorkflowinput
@@ -236,7 +244,7 @@ class ContractReviewerWorkflow:
             raise ApplicationError("no summaries generated")
 
         self.status = "synthesizing"
-        synthesis_start = time.monotonic()
+        synthesis_start = workflow.now().timestamp()
         workflow.logger.info(
             f"synthesizing summaries from {len(self.summuries)} contracts"
         )
@@ -260,7 +268,7 @@ class ContractReviewerWorkflow:
         )
         self.report = json_repair.loads(llm_result.response)
 
-        synthesis_duration = time.monotonic() - synthesis_start
+        synthesis_duration = workflow.now().timestamp() - synthesis_start
         log.info(
             "synthesis_completed",
             duration_seconds=round(synthesis_duration, 3),
@@ -271,8 +279,9 @@ class ContractReviewerWorkflow:
             self.status = "human_in_loop"
             self.review_decision = None
 
-            self._review_wait_start = time.time()
-            human_review_started_total.inc()
+            self._review_wait_start = workflow.now().timestamp()
+            with workflow.unsafe.sandbox_unrestricted():
+                human_review_started_total.inc()
 
             log.info(
                 "human_review_started",
@@ -286,9 +295,10 @@ class ContractReviewerWorkflow:
                     timeout=timedelta(days=3),
                 )
             except asyncio.TimeoutError:
-                wait_duration = time.time() - self._review_wait_start
-                human_review_timeout_total.inc()
-                human_review_wait_seconds.observe(wait_duration)
+                wait_duration = workflow.now().timestamp() - self._review_wait_start
+                with workflow.unsafe.sandbox_unrestricted():
+                    human_review_timeout_total.inc()
+                    human_review_wait_seconds.observe(wait_duration)
                 workflow.logger.warning(
                     "Review timed out after 3 days — auto-completing"
                 )
@@ -299,11 +309,13 @@ class ContractReviewerWorkflow:
                 )
                 break
 
-            wait_duration = time.time() - self._review_wait_start
-            human_review_wait_seconds.observe(wait_duration)
+            wait_duration = workflow.now().timestamp() - self._review_wait_start
+            with workflow.unsafe.sandbox_unrestricted():
+                human_review_wait_seconds.observe(wait_duration)
 
             if self.review_decision == "APPROVED":
-                human_review_approved_total.inc()
+                with workflow.unsafe.sandbox_unrestricted():
+                    human_review_approved_total.inc()
                 workflow.logger.info(
                     f"review approved after {rev+1} revision(s) {self.approved_by}"
                 )
@@ -315,7 +327,8 @@ class ContractReviewerWorkflow:
                 )
                 break
 
-            human_review_revised_total.inc()
+            with workflow.unsafe.sandbox_unrestricted():
+                human_review_revised_total.inc()
             self.status = "revising"
             workflow.logger.info(f"revising after {rev+1} revision(s)")
 

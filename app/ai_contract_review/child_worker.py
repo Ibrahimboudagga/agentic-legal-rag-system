@@ -1,21 +1,24 @@
-import time
+import os
+import sys
 from dataclasses import dataclass
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
 from datetime import timedelta
 
 import json_repair
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from shared.observability.logging import get_logger, workflow_id_var
-from shared.observability.metrics import (
-    active_workflows,
-    workflow_completed_total,
-    workflow_duration_seconds,
-    workflow_failed_total,
-    workflow_started_total,
-)
-
 with workflow.unsafe.imports_passed_through():
+    from shared.observability.logging import get_logger, workflow_id_var
+    from shared.observability.metrics import (
+        active_workflows,
+        workflow_completed_total,
+        workflow_duration_seconds,
+        workflow_failed_total,
+        workflow_started_total,
+    )
     from activities import extract_pdf, call_llm, extractpdfinput, calllminput
     import prompts
 
@@ -46,15 +49,16 @@ DEFAULT_RETRY_POLICY = RetryPolicy(
 class pdfsummaryworkflow:
     @workflow.run
     async def run(self, param: pdfsummaryinput) -> pdfsummaryoutput:
-        start_time = time.time()
+        start_time = workflow.now().timestamp()
         info = workflow.info()
 
         workflow_id_var.set(info.workflow_id)
-        workflow_started_total.labels(
-            workflow_type="pdfsummaryworkflow",
-            task_queue=info.task_queue,
-        ).inc()
-        active_workflows.labels(workflow_type="pdfsummaryworkflow").inc()
+        with workflow.unsafe.sandbox_unrestricted():
+            workflow_started_total.labels(
+                workflow_type="pdfsummaryworkflow",
+                task_queue=info.task_queue,
+            ).inc()
+            active_workflows.labels(workflow_type="pdfsummaryworkflow").inc()
 
         log.info(
             "child_workflow_started",
@@ -63,7 +67,7 @@ class pdfsummaryworkflow:
         )
 
         try:
-            extract_start = time.monotonic()
+            extract_start = workflow.now().timestamp()
             extract_md = await workflow.execute_activity(
                 extract_pdf,
                 extractpdfinput(s3_path=param.s3_pdf_path),
@@ -71,7 +75,7 @@ class pdfsummaryworkflow:
                 start_to_close_timeout=timedelta(minutes=20),
                 heartbeat_timeout=timedelta(seconds=120),
             )
-            extract_duration = time.monotonic() - extract_start
+            extract_duration = workflow.now().timestamp() - extract_start
 
             log.info(
                 "pdf_extraction_completed",
@@ -80,7 +84,7 @@ class pdfsummaryworkflow:
                 duration_seconds=round(extract_duration, 3),
             )
 
-            llm_start = time.monotonic()
+            llm_start = workflow.now().timestamp()
             llm_call = await workflow.execute_activity(
                 call_llm,
                 calllminput(
@@ -92,7 +96,7 @@ class pdfsummaryworkflow:
                 start_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(seconds=120),
             )
-            llm_duration = time.monotonic() - llm_start
+            llm_duration = workflow.now().timestamp() - llm_start
 
             parsed_output = json_repair.loads(llm_call.response)
             if hasattr(extract_md, "s3_md_path"):
@@ -100,14 +104,15 @@ class pdfsummaryworkflow:
             else:
                 s3_md_path = extract_md.s3_path
 
-            duration = time.time() - start_time
-            workflow_completed_total.labels(
-                workflow_type="pdfsummaryworkflow",
-                task_queue=info.task_queue,
-            ).inc()
-            workflow_duration_seconds.labels(
-                workflow_type="pdfsummaryworkflow"
-            ).observe(duration)
+            duration = workflow.now().timestamp() - start_time
+            with workflow.unsafe.sandbox_unrestricted():
+                workflow_completed_total.labels(
+                    workflow_type="pdfsummaryworkflow",
+                    task_queue=info.task_queue,
+                ).inc()
+                workflow_duration_seconds.labels(
+                    workflow_type="pdfsummaryworkflow"
+                ).observe(duration)
 
             log.info(
                 "child_workflow_completed",
@@ -125,15 +130,16 @@ class pdfsummaryworkflow:
             )
 
         except Exception as exc:
-            duration = time.time() - start_time
-            workflow_failed_total.labels(
-                workflow_type="pdfsummaryworkflow",
-                task_queue=info.task_queue,
-                error_type=type(exc).__name__,
-            ).inc()
-            workflow_duration_seconds.labels(
-                workflow_type="pdfsummaryworkflow"
-            ).observe(duration)
+            duration = workflow.now().timestamp() - start_time
+            with workflow.unsafe.sandbox_unrestricted():
+                workflow_failed_total.labels(
+                    workflow_type="pdfsummaryworkflow",
+                    task_queue=info.task_queue,
+                    error_type=type(exc).__name__,
+                ).inc()
+                workflow_duration_seconds.labels(
+                    workflow_type="pdfsummaryworkflow"
+                ).observe(duration)
 
             log.error(
                 "child_workflow_failed",
@@ -145,4 +151,5 @@ class pdfsummaryworkflow:
             raise
 
         finally:
-            active_workflows.labels(workflow_type="pdfsummaryworkflow").dec()
+            with workflow.unsafe.sandbox_unrestricted():
+                active_workflows.labels(workflow_type="pdfsummaryworkflow").dec()
