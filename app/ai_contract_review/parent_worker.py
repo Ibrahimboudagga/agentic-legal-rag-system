@@ -46,6 +46,7 @@ log = get_logger("parent_workflow")
 class ContractReviewerWorkflowinput:
     s3_paths: list[str]
     max_revesion: int = 2
+    child_task_queue: str = "pdf-pipeline-queue"
 
 
 @dataclass
@@ -187,12 +188,13 @@ class ContractReviewerWorkflow:
         workflow.logger.info(f"start extracting pdfs from {param.s3_paths}")
 
         workflow_id = workflow.info().workflow_id
-        workflow_task_queue = workflow.info().task_queue
+        child_task_queue = param.child_task_queue
 
         log.info(
             "fan_out_started",
             child_count=len(param.s3_paths),
             workflow_id=workflow_id,
+            child_task_queue=child_task_queue,
         )
 
         raw_results = await asyncio.gather(
@@ -201,7 +203,7 @@ class ContractReviewerWorkflow:
                     pdfsummaryworkflow.run,
                     pdfsummaryinput(s3_pdf_path=s3_path),
                     id=f"{workflow_id}-summary-{idx}",
-                    task_queue=workflow_task_queue,
+                    task_queue=child_task_queue,
                     parent_close_policy=ParentClosePolicy.ABANDON,
                 )
                 for idx, s3_path in enumerate(param.s3_paths)
@@ -266,13 +268,16 @@ class ContractReviewerWorkflow:
             heartbeat_timeout=timedelta(seconds=120),
             start_to_close_timeout=timedelta(minutes=5),
         )
-        self.report = json_repair.loads(llm_result.response)
+        report = json_repair.loads(llm_result.response)
+        if not isinstance(report, dict):
+            report = {"overall_risk_level": "Unknown", "top_cross_contract_risks": str(report), "recommended_actions": "Review the report manually."}
+        self.report = report
 
         synthesis_duration = workflow.now().timestamp() - synthesis_start
         log.info(
             "synthesis_completed",
             duration_seconds=round(synthesis_duration, 3),
-            report_keys=list(self.report.keys()) if isinstance(self.report, dict) else [],
+            report_keys=list(self.report.keys()),
         )
 
         for rev in range(param.max_revesion + 1):
@@ -349,7 +354,10 @@ class ContractReviewerWorkflow:
                 heartbeat_timeout=timedelta(seconds=120),
                 start_to_close_timeout=timedelta(minutes=5),
             )
-            self.report = json_repair.loads(revised_report.response)
+            report = json_repair.loads(revised_report.response)
+            if not isinstance(report, dict):
+                report = self.report  # Keep previous report if parse fails
+            self.report = report
 
             log.info(
                 "revision_completed",

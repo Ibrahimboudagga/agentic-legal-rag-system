@@ -125,8 +125,8 @@ class pdfsummaryworkflow:
 
             return pdfsummaryoutput(
                 s3_md_path=s3_md_path,
-                summary=parsed_output["summary"],
-                key_risks=parsed_output["key_risks"],
+                summary=parsed_output.get("summary", "No summary provided"),
+                key_risks=parsed_output.get("key_risks", "No key risks identified"),
             )
 
         except Exception as exc:

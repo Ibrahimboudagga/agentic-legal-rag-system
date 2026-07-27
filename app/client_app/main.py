@@ -165,7 +165,11 @@ async def startreview(request: startreviewrequest):
     workflow_id = f"contract-review-{uuid.uuid4()}"
     response = await client.start_workflow(
         "ContractReviewerWorkflow",
-        args=[{"s3_paths": request.s3_paths, "max_revesion": request.max_revesion}],
+        args=[{
+            "s3_paths": request.s3_paths,
+            "max_revesion": request.max_revesion,
+            "child_task_queue": TEMPORAL_PDF_PROCESS_TASK_QUEUE or "pdf-pipeline-queue",
+        }],
         id=workflow_id,
         task_queue=TEMPORAL_CONTRACT_REVIEW_TASK_QUEUE,
     )
