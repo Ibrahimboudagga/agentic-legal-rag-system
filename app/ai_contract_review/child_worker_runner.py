@@ -16,25 +16,24 @@ from shared.observability.tracing import setup_temporal_runtime, setup_tracing
 load_dotenv()
 configure_logging()
 
-log = get_logger("parent_worker")
+log = get_logger("child_worker_runner")
 
 TEMPORAL_HOST = os.getenv("TEMPORAL_HOST")
 TEMPORAL_NAMESPACE = os.getenv("TEMPORAL_NAMESPACE")
 TEMPORAL_TASK_QUEUE = os.getenv(
-    "TEMPORAL_CONTRACT_REVIEW_TASK_QUEUE", "contract-review-queue"
+    "TEMPORAL_PDF_PROCESS_TASK_QUEUE", "pdf-pipeline-queue"
 )
 
-from activities import extract_pdf, call_llm
-from parent_worker import ContractReviewerWorkflow
+from activities import call_llm, extract_pdf
 from child_worker import pdfsummaryworkflow
 
 
 async def main():
-    metrics_port = int(os.getenv("WORKER_METRICS_PORT", "9001"))
+    metrics_port = int(os.getenv("CHILD_WORKER_METRICS_PORT", "9003"))
     start_http_server(metrics_port, registry=REGISTRY)
     log.info("metrics_server_started", port=metrics_port)
 
-    interceptor = setup_tracing(service_name="contract-review-parent-worker")
+    interceptor = setup_tracing(service_name="pdf-summary-worker")
     runtime = setup_temporal_runtime()
 
     log.info(
@@ -53,15 +52,15 @@ async def main():
     worker = Worker(
         client,
         task_queue=TEMPORAL_TASK_QUEUE,
-        workflows=[ContractReviewerWorkflow, pdfsummaryworkflow],
-        activities=[extract_pdf, call_llm],
+        workflows=[pdfsummaryworkflow],
+        activities=[call_llm, extract_pdf],
     )
 
     log.info(
         "worker_started",
         task_queue=TEMPORAL_TASK_QUEUE,
-        workflows=["ContractReviewerWorkflow", "pdfsummaryworkflow"],
-        activities=["extract_pdf", "call_llm"],
+        workflows=["pdfsummaryworkflow"],
+        activities=["call_llm", "extract_pdf"],
         metrics_port=metrics_port,
     )
 
