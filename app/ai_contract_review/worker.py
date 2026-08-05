@@ -24,7 +24,9 @@ TEMPORAL_TASK_QUEUE = os.getenv(
     "TEMPORAL_CONTRACT_REVIEW_TASK_QUEUE", "contract-review-queue"
 )
 
+from activities import extract_pdf, call_llm
 from parent_worker import ContractReviewerWorkflow
+from child_worker import pdfsummaryworkflow
 
 
 async def main():
@@ -51,13 +53,15 @@ async def main():
     worker = Worker(
         client,
         task_queue=TEMPORAL_TASK_QUEUE,
-        workflows=[ContractReviewerWorkflow],
+        workflows=[ContractReviewerWorkflow, pdfsummaryworkflow],
+        activities=[extract_pdf, call_llm],
     )
 
     log.info(
         "worker_started",
         task_queue=TEMPORAL_TASK_QUEUE,
-        workflows=["ContractReviewerWorkflow"],
+        workflows=["ContractReviewerWorkflow", "pdfsummaryworkflow"],
+        activities=["extract_pdf", "call_llm"],
         metrics_port=metrics_port,
     )
 

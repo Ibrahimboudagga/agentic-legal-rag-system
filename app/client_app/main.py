@@ -168,7 +168,7 @@ async def startreview(request: startreviewrequest):
         args=[{
             "s3_paths": request.s3_paths,
             "max_revesion": request.max_revesion,
-            "child_task_queue": TEMPORAL_PDF_PROCESS_TASK_QUEUE or "pdf-pipeline-queue",
+            "child_task_queue": TEMPORAL_CONTRACT_REVIEW_TASK_QUEUE or "contract-review-queue",
         }],
         id=workflow_id,
         task_queue=TEMPORAL_CONTRACT_REVIEW_TASK_QUEUE,
@@ -271,6 +271,6 @@ async def submit_approve(workflow_id: str):
 
     client = await get_temporal_client()
     handle = client.get_workflow_handle(workflow_id)
-    result = await handle.execute_update("submit_decision", args=["approve", ""])
+    result = await handle.execute_update("submit_decision", args=["approved", ""])
 
     return {"status": "ok", "message": result}

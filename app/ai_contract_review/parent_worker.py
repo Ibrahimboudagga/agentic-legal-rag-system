@@ -46,7 +46,7 @@ log = get_logger("parent_workflow")
 class ContractReviewerWorkflowinput:
     s3_paths: list[str]
     max_revesion: int = 2
-    child_task_queue: str = "pdf-pipeline-queue"
+    child_task_queue: str = "contract-review-queue"
 
 
 @dataclass
@@ -318,7 +318,7 @@ class ContractReviewerWorkflow:
             with workflow.unsafe.sandbox_unrestricted():
                 human_review_wait_seconds.observe(wait_duration)
 
-            if self.review_decision == "APPROVED":
+            if self.review_decision == "approved":
                 with workflow.unsafe.sandbox_unrestricted():
                     human_review_approved_total.inc()
                 workflow.logger.info(
