@@ -166,6 +166,77 @@ active_activities = Gauge(
     registry=REGISTRY,
 )
 
+# ── RAG / VECTOR STORE METRICS ────────────────────────────────────
+
+rag_documents_ingested_total = Counter(
+    "contract_review_rag_documents_ingested_total",
+    "Total documents ingested into vector store",
+    ["status"],
+    registry=REGISTRY,
+)
+
+rag_chunks_created_total = Counter(
+    "contract_review_rag_chunks_created_total",
+    "Total chunks created during ingestion",
+    registry=REGISTRY,
+)
+
+rag_search_requests_total = Counter(
+    "contract_review_rag_search_requests_total",
+    "Total hybrid search requests",
+    ["search_type"],
+    registry=REGISTRY,
+)
+
+rag_search_duration_seconds = Histogram(
+    "contract_review_rag_search_duration_seconds",
+    "Hybrid search duration",
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+    registry=REGISTRY,
+)
+
+rag_search_results_count = Histogram(
+    "contract_review_rag_search_results_count",
+    "Number of results returned by search",
+    buckets=[0, 1, 2, 5, 10, 20, 50],
+    registry=REGISTRY,
+)
+
+# ── AGENT METRICS ─────────────────────────────────────────────────
+
+agent_analysis_requests_total = Counter(
+    "contract_review_agent_analysis_requests_total",
+    "Total agent analysis requests",
+    ["agent_type"],
+    registry=REGISTRY,
+)
+
+agent_analysis_duration_seconds = Histogram(
+    "contract_review_agent_analysis_duration_seconds",
+    "Agent analysis duration",
+    ["agent_type"],
+    buckets=[0.5, 1, 2, 5, 10, 30, 60, 120],
+    registry=REGISTRY,
+)
+
+agent_critic_approvals_total = Counter(
+    "contract_review_agent_critic_approvals_total",
+    "Total critic approvals",
+    registry=REGISTRY,
+)
+
+agent_critic_rejections_total = Counter(
+    "contract_review_agent_critic_rejections_total",
+    "Total critic rejections",
+    registry=REGISTRY,
+)
+
+agent_citations_total = Counter(
+    "contract_review_agent_citations_total",
+    "Total citations used in agent reports",
+    registry=REGISTRY,
+)
+
 
 # ── HELPERS ───────────────────────────────────────────────────────
 

@@ -1,25 +1,24 @@
+from __future__ import annotations
+
 import asyncio
 import math
 import os
-import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-
-import boto3
 import fitz
 import pymupdf4llm
 from dotenv import load_dotenv
 from openai import OpenAI
 from temporalio import activity
 
+from shared.config import get_app_config, get_aws_config, get_llm_config
+from shared.s3 import get_s3_client, parse_s3_path
 from shared.observability.logging import (
     activity_type_var,
     get_logger,
-    workflow_id_var,
 )
 from shared.observability.metrics import (
     active_activities,
@@ -27,8 +26,6 @@ from shared.observability.metrics import (
     activity_duration_seconds,
     activity_failed_total,
     documents_processed_total,
-    llm_tokens_input_total,
-    llm_tokens_output_total,
     pdf_extraction_duration_seconds,
     record_llm_call,
 )
@@ -37,61 +34,45 @@ load_dotenv()
 
 log = get_logger("activities")
 
-AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY_ID"]
-AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
-AWS_REGION = os.environ["AWS_REGION"]
-AWS_S3_ENDPOINT_URL = os.environ["AWS_S3_ENDPOINT_URL"]
-S3_BUCKET = os.environ["S3_BUCKET"]
-TEMP_DIR = os.environ["TEMP_DIR"]
+_app_config = get_app_config()
+_aws_config = get_aws_config()
+_llm_config = get_llm_config()
 
-os.makedirs(TEMP_DIR, exist_ok=True)
-
-LLM_MODEL = os.getenv("LLM_MODEL_NAME", "deepseek/deepseek-v4-flash")
-LLM_INPUT_PRICE_PER_1K = float(os.getenv("LLM_INPUT_PRICE_PER_1K_TOKENS", "0.00014"))
-LLM_OUTPUT_PRICE_PER_1K = float(os.getenv("LLM_OUTPUT_PRICE_PER_1K_TOKENS", "0.00028"))
+os.makedirs(_app_config.temp_dir, exist_ok=True)
 
 
 @dataclass
-class extractpdfinput:
+class ExtractPDFInput:
     s3_path: str
     batch_size: int = 2
 
 
 @dataclass
-class extractpdfoutput:
+class ExtractPDFOutput:
     s3_md_path: str
     markdown_txt: str
     pages_num: int
 
 
 @dataclass
-class calllminput:
+class CallLLMInput:
     prompt: str
 
 
 @dataclass
-class calllmoutput:
+class CallLLMOutput:
     response: str
 
 
-def get_s3_client():
-    return boto3.client(
-        "s3",
-        endpoint_url=AWS_S3_ENDPOINT_URL,
-        aws_access_key_id=AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-        region_name=AWS_REGION,
-    )
-
-
-def parse_s3_path(path: str):
-    s3_path_no_scheme = path.replace("s3://", "")
-    bucket, _, key = s3_path_no_scheme.partition("/")
-    return bucket, key
+# Backward-compatible aliases for existing workflow references
+extractpdfinput = ExtractPDFInput
+extractpdfoutput = ExtractPDFOutput
+calllminput = CallLLMInput
+calllmoutput = CallLLMOutput
 
 
 @activity.defn
-async def extract_pdf(param: extractpdfinput) -> extractpdfoutput:
+async def extract_pdf(param: ExtractPDFInput) -> ExtractPDFOutput:
     activity_type_var.set("extract_pdf")
     start = time.monotonic()
     active_activities.labels(activity_type="extract_pdf").inc()
@@ -101,55 +82,58 @@ async def extract_pdf(param: extractpdfinput) -> extractpdfoutput:
 
         activity.heartbeat(
             {
-                "current_step": "downloading pdf",
+                "current_step": "downloading_pdf",
                 "page_progress": 0,
-                "start_time": datetime.now().isoformat(),
+                "start_time": datetime.now(timezone.utc).isoformat(),
             }
         )
-        client = get_s3_client()
+        s3_client = get_s3_client(_aws_config)
         bucket, key = parse_s3_path(param.s3_path)
         filename = Path(key).name
-        local_path = Path(TEMP_DIR) / filename
+        local_path = Path(_app_config.temp_dir) / filename
 
-        await asyncio.to_thread(client.download_file, bucket, key, str(local_path))
+        await asyncio.to_thread(s3_client.download_file, bucket, key, str(local_path))
         doc = await asyncio.to_thread(fitz.open, local_path)
         total_pages = doc.page_count
         activity.logger.info(f"Total pages: {total_pages}")
 
         total_num_batches = math.ceil(total_pages / param.batch_size)
         all_text_chunks = []
-        for i in range(total_num_batches):
-            start_page = i * param.batch_size
-            end_page = min((i + 1) * param.batch_size, total_pages)
-            activity.logger.info(f"Processing pages {start_page} to {end_page}")
-            batch_md = await asyncio.to_thread(
-                pymupdf4llm.to_markdown,
-                doc,
-                from_page=start_page,
-                to_page=end_page,
-            )
+        try:
+            for i in range(total_num_batches):
+                start_page = i * param.batch_size
+                end_page = min((i + 1) * param.batch_size, total_pages)
+                activity.logger.info(f"Processing pages {start_page} to {end_page}")
+                batch_md = await asyncio.to_thread(
+                    pymupdf4llm.to_markdown,
+                    doc,
+                    from_page=start_page,
+                    to_page=end_page,
+                )
 
-            all_text_chunks.append(batch_md)
+                all_text_chunks.append(batch_md)
 
-            activity.heartbeat(
-                {
-                    "current_step": "extracting pdf to markdown",
-                    "page_progress": end_page,
-                    "start_time": datetime.now().isoformat(),
-                    "s3_path": param.s3_path,
-                    "pages_processed": end_page,
-                    "total_pages": total_pages,
-                    "progressed_batch": round(end_page / total_pages * 100, 2),
-                    "total_batches": total_num_batches,
-                    "current_batch": i + 1,
-                }
-            )
+                activity.heartbeat(
+                    {
+                        "current_step": "extracting_pdf_to_markdown",
+                        "page_progress": end_page,
+                        "start_time": datetime.now(timezone.utc).isoformat(),
+                        "s3_path": param.s3_path,
+                        "pages_processed": end_page,
+                        "total_pages": total_pages,
+                        "progressed_batch": round(end_page / total_pages * 100, 2),
+                        "total_batches": total_num_batches,
+                        "current_batch": i + 1,
+                    }
+                )
+        finally:
+            doc.close()
 
         full_markdown = "\n\n".join(all_text_chunks)
         activity.heartbeat(
             {
-                "current_step": "pdf extracted to markdown",
-                "start_time": datetime.now().isoformat(),
+                "current_step": "pdf_extracted_to_markdown",
+                "start_time": datetime.now(timezone.utc).isoformat(),
                 "s3_path": param.s3_path,
                 "total_pages": total_pages,
                 "total_batches": total_num_batches,
@@ -158,11 +142,11 @@ async def extract_pdf(param: extractpdfinput) -> extractpdfoutput:
 
         duration = time.monotonic() - start
         activity_duration_seconds.labels(
-            activity_type="extract_pdf", task_queue="contract-review-queue"
+            activity_type="extract_pdf", task_queue=activity.info().task_queue
         ).observe(duration)
         pdf_extraction_duration_seconds.observe(duration)
         activity_completed_total.labels(
-            activity_type="extract_pdf", task_queue="contract-review-queue"
+            activity_type="extract_pdf", task_queue=activity.info().task_queue
         ).inc()
         documents_processed_total.labels(status="success").inc()
 
@@ -173,7 +157,7 @@ async def extract_pdf(param: extractpdfinput) -> extractpdfoutput:
             duration_seconds=round(duration, 3),
         )
 
-        return extractpdfoutput(
+        return ExtractPDFOutput(
             s3_md_path=param.s3_path,
             markdown_txt=full_markdown,
             pages_num=total_pages,
@@ -183,7 +167,7 @@ async def extract_pdf(param: extractpdfinput) -> extractpdfoutput:
         duration = time.monotonic() - start
         activity_failed_total.labels(
             activity_type="extract_pdf",
-            task_queue="contract-review-queue",
+            task_queue=activity.info().task_queue,
             error_type=type(exc).__name__,
         ).inc()
         documents_processed_total.labels(status="failed").inc()
@@ -201,35 +185,34 @@ async def extract_pdf(param: extractpdfinput) -> extractpdfoutput:
 
 
 @activity.defn
-async def call_llm(param: calllminput) -> calllmoutput:
+async def call_llm(param: CallLLMInput) -> CallLLMOutput:
     activity_type_var.set("call_llm")
     start = time.monotonic()
     active_activities.labels(activity_type="call_llm").inc()
 
     try:
-        log.info("llm_call_started", model=LLM_MODEL, prompt_length=len(param.prompt))
+        log.info("llm_call_started", model=_llm_config.model, prompt_length=len(param.prompt))
 
-        activity.logger.info(f"Calling LLM with prompt: {param.prompt}")
         activity.heartbeat(
             {
-                "current_step": "calling llm",
-                "start_time": datetime.now().isoformat(),
-                "prompt": param.prompt,
+                "current_step": "calling_llm",
+                "start_time": datetime.now(timezone.utc).isoformat(),
+                "prompt_length": len(param.prompt),
             }
         )
 
         client = OpenAI(
-            api_key=os.getenv("OPENROUTER_API_KEY"),
-            base_url="https://openrouter.ai/api/v1",
+            api_key=_llm_config.api_key,
+            base_url=_llm_config.base_url,
         )
         response = await asyncio.to_thread(
             client.chat.completions.create,
-            model=LLM_MODEL,
+            model=_llm_config.model,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": param.prompt},
             ],
-            max_tokens=8000,
+            max_tokens=_llm_config.max_tokens,
         )
         resp = response.choices[0].message.content
 
@@ -240,19 +223,19 @@ async def call_llm(param: calllminput) -> calllmoutput:
 
         duration = time.monotonic() - start
         record_llm_call(
-            model=LLM_MODEL,
+            model=_llm_config.model,
             operation="general",
             duration=duration,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
-            input_price_per_1k=LLM_INPUT_PRICE_PER_1K,
-            output_price_per_1k=LLM_OUTPUT_PRICE_PER_1K,
+            input_price_per_1k=_llm_config.input_price_per_1k,
+            output_price_per_1k=_llm_config.output_price_per_1k,
         )
 
         activity.heartbeat(
             {
-                "current_step": "llm called",
-                "start_time": datetime.now().isoformat(),
+                "current_step": "llm_called",
+                "start_time": datetime.now(timezone.utc).isoformat(),
                 "len_content": len(resp),
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
@@ -261,25 +244,25 @@ async def call_llm(param: calllminput) -> calllmoutput:
 
         log.info(
             "llm_call_completed",
-            model=LLM_MODEL,
+            model=_llm_config.model,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             duration_seconds=round(duration, 3),
             response_length=len(resp),
         )
 
-        return calllmoutput(response=resp)
+        return CallLLMOutput(response=resp)
 
     except Exception as exc:
         duration = time.monotonic() - start
         activity_failed_total.labels(
             activity_type="call_llm",
-            task_queue="contract-review-queue",
+            task_queue=activity.info().task_queue,
             error_type=type(exc).__name__,
         ).inc()
         log.error(
             "llm_call_failed",
-            model=LLM_MODEL,
+            model=_llm_config.model,
             error=str(exc),
             error_type=type(exc).__name__,
             duration_seconds=round(duration, 3),
