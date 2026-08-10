@@ -113,11 +113,53 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Create all tables (idempotent)."""
+    """Create all tables and FTS trigger (idempotent)."""
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS unaccent"))
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await conn.run_sync(Base.metadata.create_all)
+        # Add search_vector tsvector column if not exists
+        await conn.execute(text("""
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'chunks' AND column_name = 'search_vector'
+                ) THEN
+                    ALTER TABLE chunks ADD COLUMN search_vector tsvector;
+                END IF;
+            END $$;
+        """))
+        # Create GIN index for fast FTS lookups
+        await conn.execute(text("""
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_indexes WHERE indexname = 'ix_chunks_search_vector'
+                ) THEN
+                    CREATE INDEX ix_chunks_search_vector ON chunks USING gin(search_vector);
+                END IF;
+            END $$;
+        """))
+        # Create trigger to auto-populate search_vector on insert/update
+        await conn.execute(text("""
+            CREATE OR REPLACE FUNCTION update_search_vector() RETURNS trigger AS $$
+            BEGIN
+                NEW.search_vector := to_tsvector('english', COALESCE(NEW.content, ''));
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """))
+        await conn.execute(text("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_chunks_search_vector') THEN
+                    CREATE TRIGGER trg_chunks_search_vector
+                    BEFORE INSERT OR UPDATE OF content ON chunks
+                    FOR EACH ROW
+                    EXECUTE FUNCTION update_search_vector();
+                END IF;
+            END $$;
+        """))
 
 
 async def close_db() -> None:

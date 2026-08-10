@@ -11,3 +11,6 @@ dist/
 build/
 .DS_Store
 Thumbs.db
+*.pem
+*.key
+*.crt

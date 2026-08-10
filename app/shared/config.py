@@ -4,8 +4,6 @@ import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-import boto3
-
 
 @dataclass(frozen=True)
 class AWSConfig:

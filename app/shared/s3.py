@@ -6,7 +6,7 @@ from typing import Any
 import boto3
 from mypy_boto3_s3 import S3Client
 
-from app.shared.config import AWSConfig, get_aws_config
+from shared.config import AWSConfig, get_aws_config
 
 
 def parse_s3_path(path: str) -> tuple[str, str]:

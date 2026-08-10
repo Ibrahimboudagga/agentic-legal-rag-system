@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections import Counter
 
 from agents.evidence_store import EvidenceStore
@@ -145,6 +146,3 @@ def _check_consistency(items: list) -> float:
 
     majority_ratio = max(pos_count, neg_count) / total
     return majority_ratio
-
-
-import os

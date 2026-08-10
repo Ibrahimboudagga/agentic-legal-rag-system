@@ -63,7 +63,7 @@ ContractReviewerWorkflowoutput = ContractReviewerWorkflowOutput
 class ContractReviewerWorkflow:
     def __init__(self):
         self.status: str = "processing"
-        self.summuries: list = []
+        self.summaries: list = []
         self.report: str = ""
 
         self.review_decision: Optional[str] = None
@@ -263,7 +263,7 @@ class ContractReviewerWorkflow:
                     n=len(self.summaries),
                     summaries="\n\n".join(
                         f"contract{i+1}:\n{s['summary']}\nkey_risk:{s['key_risks']}"
-                        for i, s in enumerate(self.summuries)
+                        for i, s in enumerate(self.summaries)
                     ),
                 )
             ),

@@ -144,11 +144,9 @@ async def get_status(workflow_id: str):
     try:
         handle = client.get_workflow_handle(workflow_id)
         description = await handle.describe()
-        res = await handle.result()
         result = {
             "status": description.status.name,
             "workflow_id": workflow_id,
-            "result": res,
         }
         return result
     except Exception as e:

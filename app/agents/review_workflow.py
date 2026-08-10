@@ -294,13 +294,12 @@ class AgentReviewWorkflow:
 
             graph_result = await workflow.execute_activity(
                 run_agent_graph_activity,
-                RunAgentGraphInput(
-                    query=revised_query,
-                    s3_paths=param.s3_paths,
-                    max_iterations=param.max_iterations,
-                    max_retrieval_iterations=param.max_retrieval_iterations,
-                    auto_ingest=False,
-                ),
+            RunAgentGraphInput(
+                query=revised_query,
+                s3_paths=param.s3_paths,
+                max_iterations=param.max_iterations,
+                max_retrieval_iterations=param.max_retrieval_iterations,
+            ),
                 schedule_to_close_timeout=timedelta(minutes=15),
                 heartbeat_timeout=timedelta(seconds=120),
                 start_to_close_timeout=timedelta(minutes=15),

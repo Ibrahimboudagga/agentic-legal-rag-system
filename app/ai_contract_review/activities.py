@@ -11,10 +11,10 @@ from pathlib import Path
 import fitz
 import pymupdf4llm
 from dotenv import load_dotenv
-from openai import OpenAI
 from temporalio import activity
 
 from shared.config import get_app_config, get_aws_config, get_llm_config
+from shared.llm_client import get_llm_client
 from shared.s3 import get_s3_client, parse_s3_path
 from shared.observability.logging import (
     activity_type_var,
@@ -201,25 +201,17 @@ async def call_llm(param: CallLLMInput) -> CallLLMOutput:
             }
         )
 
-        client = OpenAI(
-            api_key=_llm_config.api_key,
-            base_url=_llm_config.base_url,
-        )
+        client = get_llm_client()
         response = await asyncio.to_thread(
-            client.chat.completions.create,
-            model=_llm_config.model,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": param.prompt},
-            ],
+            client.complete,
+            prompt=param.prompt,
+            system_prompt="You are a helpful assistant.",
             max_tokens=_llm_config.max_tokens,
         )
-        resp = response.choices[0].message.content
+        resp = response.content
 
-        tokens_in = getattr(response.usage, "prompt_tokens", 0) if response.usage else 0
-        tokens_out = (
-            getattr(response.usage, "completion_tokens", 0) if response.usage else 0
-        )
+        tokens_in = response.usage.prompt_tokens
+        tokens_out = response.usage.completion_tokens
 
         duration = time.monotonic() - start
         record_llm_call(
