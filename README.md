@@ -1,311 +1,333 @@
 # Agentic Legal RAG System
 
-A production-grade agentic RAG platform for legal contract intelligence with strict separation: deterministic infrastructure, LangGraph agentic reasoning, and centralized LLM inference via OpenRouter.
+A production-oriented contract intelligence platform that combines durable workflow orchestration, agentic retrieval-augmented generation, hybrid search, local embeddings/reranking, and evidence-grounded legal analysis.
 
----
+The system is designed for legal and procurement teams that need to ask questions across one or many contracts while preserving source provenance. It avoids sending entire PDFs blindly to an LLM. Instead, it ingests documents into a searchable evidence store, retrieves relevant clauses, validates evidence, and only then asks LLM-based agents to analyze and synthesize.
 
-## Table of Contents
+## What This Project Does
 
-- [Architecture Overview](#architecture-overview)
-- [Architecture Documents](#architecture-documents)
-- [Project Structure](#project-structure)
-- [Prerequisites](#prerequisites)
-- [Infrastructure Setup](#infrastructure-setup)
-- [Environment Variables](#environment-variables)
-- [Running the Application](#running-the-application)
-- [API Endpoints](#api-endpoints)
-- [Testing](#testing)
+This project transforms contract review from a simple "extract PDF and summarize everything" flow into an Agentic RAG workflow:
 
----
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Layer C: LLM Inference                       │
-│              shared/llm_client.py  (OpenRouter only)                │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │
-┌───────────────────────────────┼─────────────────────────────────────┐
-│                        Layer B: Agentic Reasoning                   │
-│  planner → retrieval → rerank → evidence → validate → analysis      │
-│  → comparison → synthesis → END                                     │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │
-┌───────────────────────────────┼─────────────────────────────────────┐
-│                  Layer A: Deterministic Infrastructure              │
-│  PostgreSQL+pgvector │ Ingestion │ Retrieval │ Reranker │ Evidence │
-└─────────────────────────────────────────────────────────────────────┘
+```text
+FastAPI
+-> Temporal workflow
+-> LangGraph agent runtime
+-> Planner
+-> Hybrid retrieval tools
+-> Reranker
+-> Evidence store
+-> Evidence validator
+-> Analysis and comparison agents
+-> Evidence-grounded synthesis
+-> Durable human review
 ```
 
-**Three-layer separation:**
-- **Layer A** — Deterministic infrastructure (NO LLM): Temporal, PostgreSQL+pgvector, FTS, S3, PDF extraction, chunking, embedding, reranking (cross-encoder), metadata filtering, Pydantic, observability.
-- **Layer B** — Agentic reasoning (LangGraph): planner, tool selection, retrieval sufficiency decisions, evidence sufficiency, analysis selection, synthesis.
-- **Layer C** — LLM inference: ALL calls through centralized `LLMClient` → OpenRouter only. No direct model provider calls from agents.
+The core promise is simple: legal conclusions should be traceable to contract evidence. If evidence is missing, the system should say so rather than inventing support.
 
----
+## Current Capabilities
 
-## Architecture Documents
+- PDF ingestion from S3-compatible storage.
+- PDF-to-Markdown extraction with PyMuPDF4LLM.
+- Structure-aware chunking with inferred section, clause, page, and parent metadata.
+- Local Sentence Transformers embeddings.
+- PostgreSQL storage with pgvector support.
+- PostgreSQL full-text search.
+- Hybrid retrieval using vector search, FTS, metadata filtering, and reciprocal rank fusion.
+- Local cross-encoder reranking.
+- LangGraph planner, retrieval, validation, analysis, comparison, and synthesis flow.
+- Query rewriting when evidence validation fails.
+- Centralized OpenRouter LLM client using the OpenAI-compatible SDK.
+- Configurable model routing for planner, rewrite, validator, analysis, and synthesis tasks.
+- Temporal workflows for durable execution and human-in-the-loop review.
+- Prometheus, OpenTelemetry, Loki, Jaeger, Grafana, and structlog observability.
+- Local evaluation primitives for retrieval and generation quality.
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — full system overview and Temporal/LangGraph separation.
-- [RAG.md](RAG.md) — ingestion, chunk metadata, hybrid retrieval, reranking, and provenance.
-- [AGENTS.md](AGENTS.md) — planner, capability registry, retrieval loop, analysis, synthesis, and HITL.
-- [EVALUATION.md](EVALUATION.md) — local retrieval/generation metrics and the seed golden dataset.
-- [OBSERVABILITY.md](OBSERVABILITY.md) — Prometheus, OTel, Loki, Jaeger, and Grafana setup.
+## Architecture Principles
 
----
+The system intentionally separates responsibilities into three layers.
 
-## Project Structure
+### Layer A: Deterministic Infrastructure
 
+These components do not use LLM reasoning:
+
+- Temporal workflow execution
+- PostgreSQL and pgvector
+- PostgreSQL full-text search
+- S3-compatible storage
+- PDF extraction
+- chunking
+- embedding generation
+- reranking
+- metadata filtering
+- evidence accumulation
+- heuristic evidence validation
+- logging, metrics, and tracing
+
+This keeps the core retrieval and persistence behavior testable and reproducible.
+
+### Layer B: Agentic Reasoning
+
+LangGraph is used for reasoning and state transitions:
+
+- planning
+- deciding retrieval focus
+- deciding whether comparison is needed
+- validating whether evidence is sufficient
+- rewriting retrieval queries when evidence is weak
+- selecting analysis focus
+- synthesizing final reports
+
+LangGraph is not used as a durable workflow engine. It runs inside Temporal activities.
+
+### Layer C: LLM Inference
+
+All LLM calls go through:
+
+[app/shared/llm_client.py](app/shared/llm_client.py)
+
+The project uses OpenRouter through the OpenAI-compatible async SDK. Individual agents do not instantiate provider SDKs directly. This gives one place for:
+
+- API gateway configuration
+- model routing
+- token accounting
+- cost tracking
+- JSON repair
+- structured output validation
+
+No Ollama or local LLM server is required.
+
+## System Diagram
+
+```mermaid
+flowchart TD
+    User[User] --> API[FastAPI API]
+    API --> Temporal[Temporal Workflow]
+    Temporal --> Ingest[Document Ingestion Activity]
+    Temporal --> AgentActivity[Run Agent Graph Activity]
+
+    Ingest --> Extract[PyMuPDF4LLM Extraction]
+    Extract --> Chunk[Structure-Aware Chunking]
+    Chunk --> Embed[Local Embedding Provider]
+    Embed --> DB[(PostgreSQL + pgvector + FTS)]
+
+    AgentActivity --> Planner[Planner Agent]
+    Planner --> Retrieval[Retrieval Agent]
+    Retrieval --> Tools[Retrieval Tools]
+    Tools --> Vector[pgvector Search]
+    Tools --> Keyword[PostgreSQL FTS]
+    Tools --> Metadata[Metadata Filter]
+    Vector --> Fusion[RRF Fusion]
+    Keyword --> Fusion
+    Metadata --> Fusion
+    Fusion --> Rerank[Cross-Encoder Reranker]
+    Rerank --> Evidence[Evidence Store]
+    Evidence --> Validator[Evidence Validator]
+    Validator -->|insufficient| Rewrite[Query Rewrite]
+    Rewrite --> Retrieval
+    Validator -->|sufficient or max attempts| Analysis[Analysis Agent]
+    Analysis --> Compare{Multi-contract?}
+    Compare -->|yes| Comparison[Comparison Agent]
+    Compare -->|no| Synthesis[Synthesis Agent]
+    Comparison --> Synthesis
+    Synthesis --> Review[Human Review]
 ```
+
+## Why These Technologies
+
+| Technology | Role | Why it is used |
+|---|---|---|
+| FastAPI | HTTP API | Async Python API layer with Pydantic request validation and simple operational ergonomics. |
+| Temporal | Durable workflow engine | Contract review is long-running, failure-prone, and may wait for human review. Temporal gives retries, timeouts, signals, updates, queries, and durable state. |
+| LangGraph | Agentic state machine | Agent reasoning needs explicit state, conditional transitions, retrieval loops, and controlled graph execution. |
+| OpenRouter | LLM gateway | One OpenAI-compatible gateway for model choice, routing, and cost management. |
+| PostgreSQL | Primary storage | Stores documents, chunks, metadata, and search structures in one operational database. |
+| pgvector | Vector retrieval | Enables semantic search directly inside PostgreSQL. |
+| PostgreSQL FTS | Lexical retrieval | Legal queries often depend on exact terms such as "termination", "indemnity", or "liability cap". |
+| Sentence Transformers | Local embeddings | Avoids external embedding API cost and keeps embeddings configurable. |
+| CrossEncoder reranker | Relevance reranking | Improves evidence precision after broad hybrid retrieval. |
+| PyMuPDF4LLM | PDF extraction | Produces Markdown-like document text suitable for structural chunking. |
+| Prometheus | Metrics | Tracks workflows, activities, LLM calls, retrieval, evidence validation, and agent behavior. |
+| OpenTelemetry + Jaeger | Tracing | Follows a request through API, Temporal, LangGraph, retrieval, LLM, and synthesis. |
+| Loki + structlog | Logs | Structured JSON logs with correlation IDs and workflow metadata. |
+| Grafana | Dashboards | Visualizes metrics, traces, logs, and business health. |
+
+## Repository Layout
+
+```text
 agentic-legal-rag-system/
 ├── app/
-│   ├── shared/                          # Shared infrastructure
-│   │   ├── config.py                    # Frozen dataclasses for all config
-│   │   ├── database.py                  # Async SQLAlchemy ORM (Document, Chunk)
-│   │   ├── s3.py                        # S3 download/upload/content-hash
-│   │   ├── llm_client.py                # Centralized LLMClient → OpenRouter
-│   │   └── observability/               # Prometheus, OTel, structlog, Loki
+│   ├── agents/
+│   │   ├── graph.py                    # LangGraph graph wiring
+│   │   ├── state.py                    # typed graph state and dataclasses
+│   │   ├── planner.py                  # LLM planner
+│   │   ├── query_rewriter.py           # retrieval-loop query rewrite
+│   │   ├── retrieval_agent.py          # retrieval node using tool layer
+│   │   ├── infrastructure_nodes.py     # rerank, evidence build, validation
+│   │   ├── analysis_agent.py           # evidence-grounded legal analysis
+│   │   ├── comparison_agent.py         # cross-contract comparison
+│   │   ├── synthesis_node.py           # final structured report
+│   │   ├── capability_registry.py      # scalable agent capability registry
+│   │   ├── schemas.py                  # Pydantic schemas for structured outputs
+│   │   ├── evidence_store.py           # citation and evidence accumulator
+│   │   ├── evidence_validator.py       # deterministic evidence checks
+│   │   ├── activities.py               # Temporal activities for agent/RAG flow
+│   │   ├── ingest_workflow.py          # Temporal document ingestion workflow
+│   │   └── review_workflow.py          # Temporal agent review workflow
 │   │
-│   ├── ingestion/                       # Ingestion pipeline
-│   │   ├── chunker.py                   # Markdown-aware paragraph-boundary chunker
-│   │   ├── embedder.py                  # Local sentence-transformers
-│   │   └── pipeline.py                  # Download → Extract → Chunk → Embed → Store
-│   │
-│   ├── retrieval/                       # Retrieval layer
-│   │   ├── vector_store.py              # pgvector ANN + FTS search
-│   │   └── hybrid_search.py             # RRF merge of results
-│   │
-│   ├── agents/                          # Agentic pipeline
-│   │   ├── state.py                     # AgentState TypedDict
-│   │   ├── graph.py                     # LangGraph graph wiring
-│   │   ├── infrastructure_nodes.py      # Deterministic retrieval/rerank/evidence
-│   │   ├── planner.py                   # Query decomposition (LLM)
-│   │   ├── analysis_agent.py            # Legal analysis (LLM)
-│   │   ├── comparison_agent.py          # Cross-contract (LLM)
-│   │   ├── synthesis_node.py            # Final report (LLM)
-│   │   ├── retrieval_tools.py           # ANN + FTS + Metadata tools
-│   │   ├── retrieval_agent.py           # Deterministic retrieval
-│   │   ├── reranker.py                  # Cross-encoder reranker
-│   │   ├── evidence_store.py            # Evidence accumulator
-│   │   ├── evidence_validator.py        # Heuristic validation
-│   │   ├── activities.py                # Temporal activities
-│   │   ├── review_workflow.py           # Agent review workflow
-│   │   └── ingest_workflow.py           # Ingest workflow
-│   │
-│   ├── client_app/                      # FastAPI HTTP server
-│   │   ├── main.py
+│   ├── client_app/
+│   │   ├── main.py                     # FastAPI app and endpoints
 │   │   └── requirements.txt
 │   │
-│   ├── ai_contract_review/              # Original contract review
-│   │   ├── worker.py
-│   │   ├── parent_worker.py
-│   │   ├── child_worker.py
-│   │   ├── activities.py
+│   ├── ai_contract_review/
+│   │   ├── worker.py                   # Temporal worker registration
+│   │   ├── parent_worker.py            # legacy parent contract workflow
+│   │   ├── child_worker.py             # legacy per-contract child workflow
+│   │   ├── activities.py               # legacy extraction/LLM activities
+│   │   ├── prompts.py
 │   │   └── requirements.txt
 │   │
-│   ├── pdf_extraction_01/               # Standalone PDF pipeline
-│   └── pdf_extraction_01_temporal/      # Temporal PDF pipeline
+│   ├── ingestion/
+│   │   ├── chunker.py                  # structure-aware Markdown chunker
+│   │   ├── embedder.py                 # EmbeddingProvider and local implementation
+│   │   └── pipeline.py                 # S3 PDF -> chunks -> embeddings -> DB
+│   │
+│   ├── retrieval/
+│   │   ├── service.py                  # retrieval service used by tools
+│   │   ├── vector_store.py             # storage and lower-level search helpers
+│   │   └── hybrid_search.py            # earlier two-source hybrid search helper
+│   │
+│   ├── tools/
+│   │   └── retrieval.py                # agent-facing retrieval tools
+│   │
+│   ├── shared/
+│   │   ├── config.py                   # centralized configuration dataclasses
+│   │   ├── database.py                 # SQLAlchemy models and DB init
+│   │   ├── llm_client.py               # centralized OpenRouter LLM client
+│   │   ├── s3.py                       # S3 URI/client helpers
+│   │   └── observability/              # metrics, tracing, logging, middleware
+│   │
+│   └── evaluation/
+│       ├── retrieval.py                # Recall@K, Precision@K, MRR, NDCG
+│       ├── generation.py               # citation correctness, groundedness
+│       └── datasets/
 │
-├── samples-server/compose/              # Docker Compose configs
-├── ARCHITECTURE.md
-├── OBSERVABILITY.md
-├── RUN.md
-└── README.md
+├── samples-server/compose/             # Docker Compose infrastructure
+├── tests/                              # unit tests
+├── README.md                           # this file
+├── RUN.md                              # detailed local runbook
+├── ARCHITECTURE.md                     # extended architecture reference
+├── RAG.md                              # RAG-specific design
+├── AGENTS.md                           # agent flow and state design
+├── EVALUATION.md                       # evaluation design
+└── OBSERVABILITY.md                    # observability reference
 ```
 
----
+## Main Workflows
 
-## Prerequisites
+### Document Ingestion
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Python | 3.11+ | Runtime |
-| Docker Desktop | Latest | Temporal server, PostgreSQL, pgvector, observability |
-| pip | Latest | Python package management |
-
-**PostgreSQL extensions required:** `vector` (pgvector), `unaccent`, `pg_trgm`.
-
----
-
-## Infrastructure Setup
-
-### Start All Infrastructure
-
-```bash
-cd samples-server/compose
-docker compose -f docker-compose-observability.yml up -d
+```text
+S3 PDF
+-> download to temp storage
+-> PyMuPDF4LLM extraction
+-> Markdown text
+-> structure-aware chunking
+-> local embeddings
+-> PostgreSQL documents/chunks tables
+-> pgvector and FTS searchable evidence
 ```
 
-This starts:
-- **PostgreSQL + pgvector** on port `5432`
-- **Temporal Server** on port `7233`
-- **Temporal UI** on port `8080`
-- **OTel Collector** on ports `4317`, `8889`
-- **Jaeger** on port `16686`
-- **Prometheus** on port `9090`
-- **Loki** on port `3100`
-- **Grafana** on port `8085`
+The ingestion path stores chunk-level provenance. The target citation fields are:
 
-### Initialize Database Extensions
+- document ID
+- S3 path
+- chunk ID
+- section
+- clause
+- page number
+- page start/end
+- source tool
+- retrieval/rerank score
 
-```bash
-docker exec temporal-postgresql psql -U postgres -d legal_rag -c "CREATE EXTENSION IF NOT EXISTS vector;"
-docker exec temporal-postgresql psql -U postgres -d legal_rag -c "CREATE EXTENSION IF NOT EXISTS unaccent;"
-docker exec temporal-postgresql psql -U postgres -d legal_rag -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+### Agentic Review
+
+```text
+User query
+-> planner creates objective, subqueries, capabilities, comparison flag
+-> retrieval agent calls hybrid retrieval tools
+-> candidates are fused and reranked
+-> evidence is accumulated and validated
+-> weak evidence triggers query rewriting and another retrieval pass
+-> analysis agent produces cited legal findings
+-> comparison agent runs when multiple contracts are in scope
+-> synthesis agent produces a structured final report
+-> Temporal waits for human approval or revision
 ```
 
-### Verify Infrastructure
+Maximum retrieval iterations are controlled by `MAX_RETRIEVAL_ITERATIONS`.
 
-```bash
-docker compose -f docker-compose-observability.yml ps
+### Human Review
+
+Human review is implemented with Temporal workflow signals, updates, and queries. It is durable, so the application can wait for review without holding an in-memory request open.
+
+Review decisions:
+
+- assign reviewer
+- approve report
+- request revision with feedback
+
+On revision, the workflow reruns the agent graph with the reviewer feedback included in the query context.
+
+## API Overview
+
+### Health
+
+```http
+GET /health
 ```
 
----
+### Ingest Document
 
-## Environment Variables
-
-### `app/client_app/.env`
-
-```env
-TEMPORAL_HOST=localhost:7233
-TEMPORAL_NAMESPACE=default
-TEMPORAL_PDF_PROCESS_TASK_QUEUE=pdf-pipeline-queue
-TEMPORAL_CONTRACT_REVIEW_TASK_QUEUE=contract-review-queue
-S3_BUCKET=temporal
-
-# Observability
-OTEL_ENDPOINT=http://localhost:4317
-LOKI_URL=http://localhost:3100
-APP_NAME=contract-review
-ENVIRONMENT=development
-LOG_LEVEL=INFO
-API_METRICS_PORT=9002
-```
-
-### `app/ai_contract_review/.env`
-
-```env
-# Temporal
-TEMPORAL_HOST=localhost:7233
-TEMPORAL_NAMESPACE=default
-TEMPORAL_CONTRACT_REVIEW_TASK_QUEUE=contract-review-queue
-
-# S3 Storage
-AWS_ACCESS_KEY_ID=your-access-key
-AWS_SECRET_ACCESS_KEY=your-secret-key
-AWS_REGION=us-west-2
-AWS_S3_ENDPOINT_URL=https://s3.us-west-2.idrivee2.com
-S3_BUCKET=temporal
-TEMP_DIR=/tmp/pdf-pipeline
-
-# LLM (OpenRouter)
-OPENROUTER_API_KEY=your-openrouter-key
-LLM_MODEL_NAME=deepseek/deepseek-v4-flash
-LLM_INPUT_PRICE_PER_1K_TOKENS=0.00014
-LLM_OUTPUT_PRICE_PER_1K_TOKENS=0.00028
-
-# Database
-DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/legal_rag
-DATABASE_SYNC_URL=postgresql://postgres:postgres@localhost:5432/legal_rag
-DB_POOL_SIZE=5
-EMBEDDING_DIM=384
-
-# Observability
-OTEL_ENDPOINT=http://localhost:4317
-LOKI_URL=http://localhost:3100
-APP_NAME=contract-review
-ENVIRONMENT=development
-LOG_LEVEL=INFO
-WORKER_METRICS_PORT=9001
-```
-
----
-
-## Running the Application
-
-### 1. Start Infrastructure
-
-```bash
-cd samples-server/compose
-docker compose -f docker-compose-observability.yml up -d
-```
-
-### 2. Initialize Database
-
-```bash
-docker exec temporal-postgresql psql -U postgres -d legal_rag -c "CREATE EXTENSION IF NOT EXISTS vector;"
-```
-
-### 3. Install Dependencies
-
-**Terminal 1 — Worker:**
-```bash
-cd app/ai_contract_review
-pip install -r requirements.txt
-```
-
-**Terminal 2 — API:**
-```bash
-cd app/client_app
-pip install -r requirements.txt
-```
-
-### 4. Start the Worker
-
-```bash
-cd app/ai_contract_review
-python worker.py
-```
-
-### 5. Start the API
-
-```bash
-cd app/client_app
-uvicorn main:app --reload --port 5000
-```
-
-### 6. Verify
-
-```bash
-curl http://localhost:5000/health
-# {"status":"ok"}
-```
-
----
-
-## API Endpoints
-
-### Ingestion
-
-```
+```http
 POST /ingest
+```
+
+```json
 {
-  "s3_path": "s3://temporal/contract.pdf",
+  "s3_path": "s3://temporal/vendor-service-agreement.pdf",
   "batch_size": 2,
   "max_chunk_tokens": 512
 }
 ```
 
-### Agentic RAG Review
+### Start Agentic RAG Review
 
-```
+```http
 POST /agent-review/start
+```
+
+```json
 {
-  "query": "What are the termination clauses and liability caps?",
-  "s3_paths": ["s3://temporal/contract1.pdf", "s3://temporal/contract2.pdf"],
-  "top_k": 5
+  "query": "Which contracts allow unilateral termination with less than 30 days notice?",
+  "s3_paths": [
+    "s3://temporal/vendor-service-agreement.pdf",
+    "s3://temporal/nda-innovate-consultpro.pdf",
+    "s3://temporal/software-license-globalsoft.pdf"
+  ],
+  "top_k": 8
 }
 ```
 
-```
+### Query Agentic Review
+
+```http
 GET /agent-review/{workflow_id}/status
 GET /agent-review/{workflow_id}/report
 ```
 
-### Contract Review (Legacy)
+### Legacy Contract Review
 
-```
+```http
 POST /contract-review/start
 GET /contract-review/{workflow_id}/status
 GET /contract-review/{workflow_id}/report
@@ -314,63 +336,64 @@ POST /contract-review/{workflow_id}/revise
 POST /contract-review/{workflow_id}/approve
 ```
 
-### PDF Extraction
+## Configuration
 
-```
-POST /process_pdf/execute
-POST /process_pdf/start
-GET /workflow/status/{workflow_id}
-```
+The main environment variables are defined in [.env.example](.env.example).
 
----
+Important groups:
 
-## Testing
+- Temporal: `TEMPORAL_HOST`, `TEMPORAL_NAMESPACE`, task queues.
+- Storage: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_S3_ENDPOINT_URL`, `S3_BUCKET`.
+- Database: `DATABASE_URL`, `DATABASE_SYNC_URL`, `DB_POOL_SIZE`, `EMBEDDING_DIM`.
+- LLM: `OPENROUTER_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL_NAME`, token prices.
+- Model routing: `PLANNER_MODEL`, `QUERY_REWRITE_MODEL`, `VALIDATOR_MODEL`, `ANALYSIS_MODEL`, `SYNTHESIS_MODEL`.
+- RAG: `EMBEDDING_MODEL`, `RERANKER_MODEL`, `TOP_K_RETRIEVAL`, `TOP_K_RERANK`, `MAX_RETRIEVAL_ITERATIONS`.
+- Observability: `OTEL_ENDPOINT`, `LOKI_URL`, `APP_NAME`, `ENVIRONMENT`, metrics ports.
 
-### Ingest a Document
+## Observability
 
-```bash
-curl -X POST http://localhost:5000/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"s3_path": "s3://temporal/vendor-service-agreement.pdf"}'
-```
+The system exposes and records:
 
-### Run Agentic Review
+- workflow started/completed/failed counts
+- workflow duration
+- activity duration and failures
+- LLM request count, duration, tokens, and estimated cost
+- document ingestion and chunk counts
+- RAG search request count, latency, and result counts
+- retrieval iteration counts
+- evidence validation failures
+- agent execution and latency metrics
+- human review approvals, revisions, and timeouts
 
-```bash
-curl -X POST http://localhost:5000/agent-review/start \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "What are the termination clauses and liability caps across these contracts?",
-    "s3_paths": [
-      "s3://temporal/vendor-service-agreement.pdf",
-      "s3://temporal/nda-innovate-consultpro.pdf",
-      "s3://temporal/software-license-globalsoft.pdf"
-    ]
-  }'
-```
+Operational dashboards are documented in [OBSERVABILITY.md](OBSERVABILITY.md).
 
-### Check Metrics
+## Evaluation
 
-```bash
-curl http://localhost:9001/metrics  # worker
-curl http://localhost:9002/metrics  # api
-```
+The initial evaluation framework is local and deterministic:
 
----
+- retrieval metrics in [app/evaluation/retrieval.py](app/evaluation/retrieval.py)
+- generation/citation metrics in [app/evaluation/generation.py](app/evaluation/generation.py)
+- golden examples in [app/evaluation/datasets/golden_contract_questions.jsonl](app/evaluation/datasets/golden_contract_questions.jsonl)
 
-## Troubleshooting
+It currently provides primitives rather than a full end-to-end evaluation runner. That keeps evaluation lightweight while the system is still evolving.
 
-| Issue | Solution |
-|-------|----------|
-| `pgvector extension not found` | Run `CREATE EXTENSION IF NOT EXISTS vector;` in PostgreSQL |
-| `Embedding dimension mismatch` | Ensure `EMBEDDING_DIM=384` matches the model |
-| Worker not picking up tasks | Verify worker is running and Temporal is on `localhost:7233` |
-| S3 connection errors | Check AWS credentials and endpoint URL in `.env` |
-| LLM errors | Verify `OPENROUTER_API_KEY` is valid |
-| Docker containers not starting | `docker compose down` then `docker compose up -d` |
+## Documentation Map
 
----
+- [RUN.md](RUN.md) — detailed setup and run instructions.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — deeper architecture and technology reference.
+- [RAG.md](RAG.md) — ingestion, retrieval, reranking, and evidence provenance.
+- [AGENTS.md](AGENTS.md) — LangGraph state, planner, capability registry, retrieval loop, and synthesis.
+- [EVALUATION.md](EVALUATION.md) — evaluation metrics and dataset format.
+- [OBSERVABILITY.md](OBSERVABILITY.md) — metrics, logs, traces, and dashboards.
+- [TESTING.md](TESTING.md) — testing strategy and examples.
+
+## Current Limitations
+
+- The structure-aware chunker infers sections and clauses heuristically from Markdown. It is useful, but it is not a full legal clause parser.
+- End-to-end execution requires PostgreSQL/pgvector, Temporal, S3-compatible storage, OpenRouter credentials, and installed Python dependencies.
+- Evaluation has metric primitives and seed data, but not yet a one-command E2E evaluation runner.
+- Some legacy PDF extraction modules remain for backward compatibility.
 
 ## License
 
-Internal project — not licensed for distribution.
+Internal project. Not licensed for external distribution unless a license is added.
