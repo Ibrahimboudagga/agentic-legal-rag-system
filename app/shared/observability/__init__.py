@@ -46,19 +46,3 @@ from shared.observability.metrics import (
 )
 from shared.observability.tracing import setup_tracing, setup_temporal_runtime
 from shared.observability.middleware import ObservabilityMiddleware
-
-# Re-export shared modules
-from shared.config import (
-    get_aws_config,
-    get_temporal_config,
-    get_llm_config,
-    get_database_config,
-    get_app_config,
-)
-from shared.s3 import (
-    parse_s3_path,
-    build_s3_uri,
-    get_s3_client,
-    extract_s3_filename,
-    get_markdown_s3_path,
-)

@@ -31,6 +31,7 @@ log = get_logger("agent_review_workflow")
 class AgentReviewWorkflowInput:
     query: str
     s3_paths: list[str]
+    top_k: int = 8
     max_iterations: int = 2
     max_retrieval_iterations: int = 3
     auto_ingest: bool = True
@@ -228,6 +229,7 @@ class AgentReviewWorkflow:
             RunAgentGraphInput(
                 query=param.query,
                 s3_paths=param.s3_paths,
+                top_k=param.top_k,
                 max_iterations=param.max_iterations,
                 max_retrieval_iterations=param.max_retrieval_iterations,
             ),
@@ -297,6 +299,7 @@ class AgentReviewWorkflow:
             RunAgentGraphInput(
                 query=revised_query,
                 s3_paths=param.s3_paths,
+                top_k=param.top_k,
                 max_iterations=param.max_iterations,
                 max_retrieval_iterations=param.max_retrieval_iterations,
             ),

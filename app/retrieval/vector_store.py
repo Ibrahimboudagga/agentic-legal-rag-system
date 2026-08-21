@@ -18,6 +18,10 @@ class SearchResult:
     score: float
     page_number: int | None = None
     chunk_index: int = 0
+    section: str | None = None
+    clause: str | None = None
+    page_start: int | None = None
+    page_end: int | None = None
     metadata: dict = field(default_factory=dict)
 
 
@@ -72,6 +76,12 @@ async def store_chunks(
             content=c["content"],
             content_tokens=c.get("content_tokens", len(c["content"]) // 4),
             page_number=c.get("page_number"),
+            page_start=c.get("page_start") or c.get("page_number"),
+            page_end=c.get("page_end") or c.get("page_number"),
+            section=c.get("section"),
+            clause=c.get("clause"),
+            document_type=c.get("document_type"),
+            language=c.get("language"),
             embedding=c["embedding"],
             metadata_json=c.get("metadata_json"),
         )
@@ -96,6 +106,10 @@ async def search_semantic(
                 d.s3_path,
                 c.content,
                 c.page_number,
+                c.page_start,
+                c.page_end,
+                c.section,
+                c.clause,
                 c.chunk_index,
                 1 - (c.embedding <=> :embedding::vector) AS similarity
             FROM chunks c
@@ -120,6 +134,10 @@ async def search_semantic(
             content=row.content,
             score=float(row.similarity),
             page_number=row.page_number,
+            page_start=row.page_start,
+            page_end=row.page_end,
+            section=row.section,
+            clause=row.clause,
             chunk_index=row.chunk_index,
         )
         for row in result.fetchall()
@@ -140,6 +158,10 @@ async def search_keyword(
                 d.s3_path,
                 c.content,
                 c.page_number,
+                c.page_start,
+                c.page_end,
+                c.section,
+                c.clause,
                 c.chunk_index,
                 ts_rank_cd(c.search_vector, plainto_tsquery('english', :query)) AS rank
             FROM chunks c
@@ -159,6 +181,10 @@ async def search_keyword(
             content=row.content,
             score=float(row.rank),
             page_number=row.page_number,
+            page_start=row.page_start,
+            page_end=row.page_end,
+            section=row.section,
+            clause=row.clause,
             chunk_index=row.chunk_index,
         )
         for row in result.fetchall()
@@ -172,7 +198,7 @@ async def get_document_chunks(
     """Get all chunks for a document."""
     result = await session.execute(
         text("""
-            SELECT id, content, chunk_index, page_number, content_tokens
+            SELECT id, content, chunk_index, page_number, page_start, page_end, section, clause, content_tokens
             FROM chunks
             WHERE document_id = :doc_id
             ORDER BY chunk_index
@@ -188,6 +214,10 @@ async def get_document_chunks(
             content=row.content,
             content_tokens=row.content_tokens,
             page_number=row.page_number,
+            page_start=row.page_start,
+            page_end=row.page_end,
+            section=row.section,
+            clause=row.clause,
         )
         for row in result.fetchall()
     ]

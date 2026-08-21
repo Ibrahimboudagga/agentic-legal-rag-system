@@ -30,6 +30,11 @@ class LLMConfig:
     input_price_per_1k: float = field(default_factory=lambda: float(os.getenv("LLM_INPUT_PRICE_PER_1K_TOKENS", "0.00014")))
     output_price_per_1k: float = field(default_factory=lambda: float(os.getenv("LLM_OUTPUT_PRICE_PER_1K_TOKENS", "0.00028")))
     max_tokens: int = field(default_factory=lambda: int(os.getenv("LLM_MAX_TOKENS", "8000")))
+    planner_model: str = field(default_factory=lambda: os.getenv("PLANNER_MODEL", os.getenv("LLM_MODEL_NAME", "deepseek/deepseek-v4-flash")))
+    query_rewrite_model: str = field(default_factory=lambda: os.getenv("QUERY_REWRITE_MODEL", os.getenv("LLM_MODEL_NAME", "deepseek/deepseek-v4-flash")))
+    validator_model: str = field(default_factory=lambda: os.getenv("VALIDATOR_MODEL", os.getenv("LLM_MODEL_NAME", "deepseek/deepseek-v4-flash")))
+    analysis_model: str = field(default_factory=lambda: os.getenv("ANALYSIS_MODEL", os.getenv("LLM_MODEL_NAME", "deepseek/deepseek-v4-flash")))
+    synthesis_model: str = field(default_factory=lambda: os.getenv("SYNTHESIS_MODEL", os.getenv("LLM_MODEL_NAME", "deepseek/deepseek-v4-flash")))
 
 
 @dataclass(frozen=True)
@@ -38,6 +43,19 @@ class DatabaseConfig:
     sync_url: str = field(default_factory=lambda: os.getenv("DATABASE_SYNC_URL", "postgresql://postgres:postgres@localhost:5432/legal_rag"))
     pool_size: int = field(default_factory=lambda: int(os.getenv("DB_POOL_SIZE", "5")))
     embedding_dim: int = field(default_factory=lambda: int(os.getenv("EMBEDDING_DIM", "384")))
+
+
+@dataclass(frozen=True)
+class RAGConfig:
+    embedding_model: str = field(default_factory=lambda: os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"))
+    reranker_model: str = field(default_factory=lambda: os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"))
+    retrieval_top_k: int = field(default_factory=lambda: int(os.getenv("TOP_K_RETRIEVAL", "20")))
+    rerank_top_k: int = field(default_factory=lambda: int(os.getenv("TOP_K_RERANK", "8")))
+    max_retrieval_iterations: int = field(default_factory=lambda: int(os.getenv("MAX_RETRIEVAL_ITERATIONS", "3")))
+    semantic_weight: float = field(default_factory=lambda: float(os.getenv("HYBRID_SEMANTIC_WEIGHT", "0.5")))
+    keyword_weight: float = field(default_factory=lambda: float(os.getenv("HYBRID_KEYWORD_WEIGHT", "0.3")))
+    metadata_weight: float = field(default_factory=lambda: float(os.getenv("HYBRID_METADATA_WEIGHT", "0.2")))
+    similarity_threshold: float = field(default_factory=lambda: float(os.getenv("HYBRID_SIMILARITY_THRESHOLD", "0.25")))
 
 
 @dataclass(frozen=True)
@@ -66,6 +84,11 @@ def get_llm_config() -> LLMConfig:
 @lru_cache(maxsize=1)
 def get_database_config() -> DatabaseConfig:
     return DatabaseConfig()
+
+
+@lru_cache(maxsize=1)
+def get_rag_config() -> RAGConfig:
+    return RAGConfig()
 
 
 @lru_cache(maxsize=1)

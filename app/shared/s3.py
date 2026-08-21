@@ -4,7 +4,6 @@ from functools import lru_cache
 from typing import Any
 
 import boto3
-from mypy_boto3_s3 import S3Client
 
 from shared.config import AWSConfig, get_aws_config
 
@@ -21,7 +20,7 @@ def build_s3_uri(bucket: str, key: str) -> str:
     return f"s3://{bucket}/{key}"
 
 
-def get_s3_client(config: AWSConfig | None = None) -> S3Client:
+def get_s3_client(config: AWSConfig | None = None) -> Any:
     """Create an S3 client from config."""
     cfg = config or get_aws_config()
     return boto3.client(

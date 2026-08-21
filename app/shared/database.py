@@ -59,6 +59,12 @@ class Chunk(Base):
     content = Column(Text, nullable=False)
     content_tokens = Column(Integer, nullable=False, default=0)
     page_number = Column(Integer, nullable=True)
+    page_start = Column(Integer, nullable=True)
+    page_end = Column(Integer, nullable=True)
+    section = Column(String(255), nullable=True)
+    clause = Column(String(64), nullable=True)
+    document_type = Column(String(64), nullable=True)
+    language = Column(String(16), nullable=True)
     embedding = Column(Vector(384), nullable=True)
     metadata_json = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
@@ -68,6 +74,9 @@ class Chunk(Base):
     __table_args__ = (
         Index("ix_chunks_document_id", "document_id"),
         Index("ix_chunks_page_number", "page_number"),
+        Index("ix_chunks_section", "section"),
+        Index("ix_chunks_clause", "clause"),
+        Index("ix_chunks_language", "language"),
     )
 
 
@@ -120,6 +129,7 @@ async def init_db() -> None:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS unaccent"))
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await conn.run_sync(Base.metadata.create_all)
+        await _ensure_chunk_metadata_columns(conn)
         # Add search_vector tsvector column if not exists
         await conn.execute(text("""
             DO $$ BEGIN
@@ -157,6 +167,28 @@ async def init_db() -> None:
                     BEFORE INSERT OR UPDATE OF content ON chunks
                     FOR EACH ROW
                     EXECUTE FUNCTION update_search_vector();
+                END IF;
+            END $$;
+        """))
+
+
+async def _ensure_chunk_metadata_columns(conn) -> None:
+    columns = {
+        "page_start": "INTEGER",
+        "page_end": "INTEGER",
+        "section": "VARCHAR(255)",
+        "clause": "VARCHAR(64)",
+        "document_type": "VARCHAR(64)",
+        "language": "VARCHAR(16)",
+    }
+    for column, column_type in columns.items():
+        await conn.execute(text(f"""
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'chunks' AND column_name = '{column}'
+                ) THEN
+                    ALTER TABLE chunks ADD COLUMN {column} {column_type};
                 END IF;
             END $$;
         """))

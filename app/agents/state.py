@@ -56,6 +56,10 @@ class UnifiedRetrievalResult:
     content: str
     score: float
     page_number: int | None = None
+    page_start: int | None = None
+    page_end: int | None = None
+    section: str | None = None
+    clause: str | None = None
     chunk_index: int = 0
     source: str = ""
     metadata: dict = field(default_factory=dict)
@@ -74,6 +78,10 @@ class RerankedChunk:
     rerank_score: float
     source: str = ""
     page_number: int | None = None
+    page_start: int | None = None
+    page_end: int | None = None
+    section: str | None = None
+    clause: str | None = None
     chunk_index: int = 0
 
 
@@ -87,6 +95,11 @@ class EvidenceItem:
     content: str
     page_number: int | None
     relevance_score: float
+    document_id: str = ""
+    section: str | None = None
+    clause: str | None = None
+    page_start: int | None = None
+    page_end: int | None = None
     citation_id: int = 0
     source_tool: str = ""
     validation_status: str = "pending"
@@ -170,7 +183,9 @@ class AgentState(TypedDict):
 
     # ── Input ──
     query: str
+    objective: str
     s3_paths: list[str]
+    top_k: int
     max_iterations: int
 
     # ── Planner ──
@@ -178,6 +193,9 @@ class AgentState(TypedDict):
     sub_queries: list[str]
     comparison_needed: bool
     analysis_focus: list[str]
+    required_capabilities: list[str]
+    retrieval_strategy: str
+    retrieval_queries: list[str]
 
     # ── Retrieval ──
     retrieval_results: list[dict]
@@ -197,6 +215,8 @@ class AgentState(TypedDict):
     validation_result: dict
     validation_attempts: int
     needs_retrieval: bool
+    missing_information: list[str]
+    _evidence_store: object
 
     # ── Analysis ──
     analysis: dict

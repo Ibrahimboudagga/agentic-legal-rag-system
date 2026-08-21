@@ -34,13 +34,6 @@ load_dotenv()
 
 log = get_logger("activities")
 
-_app_config = get_app_config()
-_aws_config = get_aws_config()
-_llm_config = get_llm_config()
-
-os.makedirs(_app_config.temp_dir, exist_ok=True)
-
-
 @dataclass
 class ExtractPDFInput:
     s3_path: str
@@ -79,6 +72,9 @@ async def extract_pdf(param: ExtractPDFInput) -> ExtractPDFOutput:
 
     try:
         log.info("pdf_extraction_started", s3_path=param.s3_path)
+        app_config = get_app_config()
+        aws_config = get_aws_config()
+        os.makedirs(app_config.temp_dir, exist_ok=True)
 
         activity.heartbeat(
             {
@@ -87,10 +83,10 @@ async def extract_pdf(param: ExtractPDFInput) -> ExtractPDFOutput:
                 "start_time": datetime.now(timezone.utc).isoformat(),
             }
         )
-        s3_client = get_s3_client(_aws_config)
+        s3_client = get_s3_client(aws_config)
         bucket, key = parse_s3_path(param.s3_path)
         filename = Path(key).name
-        local_path = Path(_app_config.temp_dir) / filename
+        local_path = Path(app_config.temp_dir) / filename
 
         await asyncio.to_thread(s3_client.download_file, bucket, key, str(local_path))
         doc = await asyncio.to_thread(fitz.open, local_path)
@@ -191,7 +187,8 @@ async def call_llm(param: CallLLMInput) -> CallLLMOutput:
     active_activities.labels(activity_type="call_llm").inc()
 
     try:
-        log.info("llm_call_started", model=_llm_config.model, prompt_length=len(param.prompt))
+        llm_config = get_llm_config()
+        log.info("llm_call_started", model=llm_config.model, prompt_length=len(param.prompt))
 
         activity.heartbeat(
             {
@@ -202,26 +199,25 @@ async def call_llm(param: CallLLMInput) -> CallLLMOutput:
         )
 
         client = get_llm_client()
-        response = await asyncio.to_thread(
-            client.complete,
+        response = await client.complete(
             prompt=param.prompt,
-            system_prompt="You are a helpful assistant.",
-            max_tokens=_llm_config.max_tokens,
+            system="You are a helpful assistant.",
+            max_tokens=llm_config.max_tokens,
         )
         resp = response.content
 
-        tokens_in = response.usage.prompt_tokens
-        tokens_out = response.usage.completion_tokens
+        tokens_in = response.tokens_in
+        tokens_out = response.tokens_out
 
         duration = time.monotonic() - start
         record_llm_call(
-            model=_llm_config.model,
+            model=llm_config.model,
             operation="general",
             duration=duration,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
-            input_price_per_1k=_llm_config.input_price_per_1k,
-            output_price_per_1k=_llm_config.output_price_per_1k,
+            input_price_per_1k=llm_config.input_price_per_1k,
+            output_price_per_1k=llm_config.output_price_per_1k,
         )
 
         activity.heartbeat(
@@ -236,7 +232,7 @@ async def call_llm(param: CallLLMInput) -> CallLLMOutput:
 
         log.info(
             "llm_call_completed",
-            model=_llm_config.model,
+            model=llm_config.model,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             duration_seconds=round(duration, 3),
@@ -254,7 +250,7 @@ async def call_llm(param: CallLLMInput) -> CallLLMOutput:
         ).inc()
         log.error(
             "llm_call_failed",
-            model=_llm_config.model,
+            model=os.getenv("LLM_MODEL_NAME", "unknown"),
             error=str(exc),
             error_type=type(exc).__name__,
             duration_seconds=round(duration, 3),

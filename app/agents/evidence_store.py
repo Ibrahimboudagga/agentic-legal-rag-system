@@ -26,9 +26,14 @@ class EvidenceStore:
             self._citation_counter += 1
             item = EvidenceItem(
                 chunk_id=chunk.chunk_id,
+                document_id=chunk.document_id,
                 s3_path=chunk.s3_path,
                 content=chunk.content,
                 page_number=chunk.page_number,
+                page_start=chunk.page_start,
+                page_end=chunk.page_end,
+                section=chunk.section,
+                clause=chunk.clause,
                 relevance_score=chunk.rerank_score,
                 citation_id=self._citation_counter,
                 source_tool=chunk.source,
@@ -49,9 +54,14 @@ class EvidenceStore:
             self._citation_counter += 1
             item = EvidenceItem(
                 chunk_id=cid,
+                document_id=chunk.get("document_id", ""),
                 s3_path=chunk.get("s3_path", ""),
                 content=chunk.get("content", ""),
                 page_number=chunk.get("page_number"),
+                page_start=chunk.get("page_start") or chunk.get("page_number"),
+                page_end=chunk.get("page_end") or chunk.get("page_number"),
+                section=chunk.get("section"),
+                clause=chunk.get("clause"),
                 relevance_score=chunk.get("score", 0.0),
                 citation_id=self._citation_counter,
                 source_tool=chunk.get("source", ""),
@@ -70,8 +80,13 @@ class EvidenceStore:
         return [
             {
                 "citation_id": item.citation_id,
+                "document_id": item.document_id,
                 "s3_path": item.s3_path,
                 "page_number": item.page_number,
+                "page_start": item.page_start,
+                "page_end": item.page_end,
+                "section": item.section,
+                "clause": item.clause,
                 "content": item.content[:300],
                 "source_tool": item.source_tool,
                 "relevance_score": item.relevance_score,
@@ -85,7 +100,8 @@ class EvidenceStore:
         for item in self._items:
             parts.append(
                 f"[Citation {item.citation_id}: {item.s3_path} | "
-                f"Page {item.page_number or 'N/A'} | "
+                f"Section {item.section or 'N/A'} | Clause {item.clause or 'N/A'} | "
+                f"Pages {item.page_start or item.page_number or 'N/A'}-{item.page_end or item.page_number or 'N/A'} | "
                 f"Score: {item.relevance_score:.3f}]\n{item.content}"
             )
         return "\n\n---\n\n".join(parts)

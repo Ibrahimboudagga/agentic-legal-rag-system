@@ -46,6 +46,7 @@ class IngestDocumentOutput:
 class RunAgentGraphInput:
     query: str
     s3_paths: list[str]
+    top_k: int = 8
     max_iterations: int = 2
     max_retrieval_iterations: int = 3
 
@@ -159,12 +160,17 @@ async def run_agent_graph_activity(param: RunAgentGraphInput) -> RunAgentGraphOu
 
         initial_state: AgentState = {
             "query": param.query,
+            "objective": param.query,
             "s3_paths": param.s3_paths,
+            "top_k": param.top_k,
             "max_iterations": param.max_iterations,
             "plan": {},
             "sub_queries": [],
             "comparison_needed": len(param.s3_paths) > 1,
             "analysis_focus": [],
+            "required_capabilities": [],
+            "retrieval_strategy": "focused",
+            "retrieval_queries": [],
             "retrieval_results": [],
             "tools_used": [],
             "retrieval_iteration": 0,
@@ -176,6 +182,8 @@ async def run_agent_graph_activity(param: RunAgentGraphInput) -> RunAgentGraphOu
             "validation_result": {},
             "validation_attempts": 0,
             "needs_retrieval": False,
+            "missing_information": [],
+            "_evidence_store": None,
             "analysis": {},
             "comparison": {},
             "synthesis": {},
@@ -186,7 +194,7 @@ async def run_agent_graph_activity(param: RunAgentGraphInput) -> RunAgentGraphOu
 
         activity.heartbeat({"current_step": "running_agent_graph"})
 
-        result = await asyncio.to_thread(graph.invoke, initial_state)
+        result = await graph.ainvoke(initial_state)
 
         duration = time.monotonic() - start
         activity_duration_seconds.labels(

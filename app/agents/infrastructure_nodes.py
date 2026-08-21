@@ -7,6 +7,7 @@ from agents.state import UnifiedRetrievalResult
 from shared.observability.metrics import (
     agent_analysis_requests_total,
     agent_analysis_duration_seconds,
+    evidence_validation_failures_total,
 )
 
 import time
@@ -23,7 +24,7 @@ async def rerank_node(state: AgentState) -> dict:
         return {"reranked_chunks": []}
 
     chunks = [UnifiedRetrievalResult(**c) for c in chunks_raw]
-    reranked = rerank_chunks(state["query"], chunks, top_k=8)
+    reranked = rerank_chunks(state["query"], chunks, top_k=state.get("top_k", 8))
 
     return {
         "reranked_chunks": [
@@ -36,6 +37,10 @@ async def rerank_node(state: AgentState) -> dict:
                 "rerank_score": r.rerank_score,
                 "source": r.source,
                 "page_number": r.page_number,
+                "page_start": r.page_start,
+                "page_end": r.page_end,
+                "section": r.section,
+                "clause": r.clause,
                 "chunk_index": r.chunk_index,
             }
             for r in reranked
@@ -74,9 +79,14 @@ async def evidence_build_node(state: AgentState) -> dict:
         "evidence": [
             {
                 "chunk_id": item.chunk_id,
+                "document_id": item.document_id,
                 "s3_path": item.s3_path,
                 "content": item.content,
                 "page_number": item.page_number,
+                "page_start": item.page_start,
+                "page_end": item.page_end,
+                "section": item.section,
+                "clause": item.clause,
                 "relevance_score": item.relevance_score,
                 "citation_id": item.citation_id,
                 "source_tool": item.source_tool,
@@ -108,6 +118,8 @@ async def evidence_validate_node(state: AgentState) -> dict:
         evidence_store=store,
         analysis_focus=state.get("analysis_focus"),
     )
+    for issue in validation.issues:
+        evidence_validation_failures_total.labels(issue_type=issue.issue_type).inc()
 
     return {
         "validation_result": {
@@ -127,6 +139,7 @@ async def evidence_validate_node(state: AgentState) -> dict:
             "needs_retrieval": validation.needs_retrieval,
         },
         "needs_retrieval": validation.needs_retrieval,
+        "missing_information": validation.suggestions,
         "validation_attempts": state.get("validation_attempts", 0) + 1,
         "_evidence_store": store,
     }

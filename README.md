@@ -7,6 +7,7 @@ A production-grade agentic RAG platform for legal contract intelligence with str
 ## Table of Contents
 
 - [Architecture Overview](#architecture-overview)
+- [Architecture Documents](#architecture-documents)
 - [Project Structure](#project-structure)
 - [Prerequisites](#prerequisites)
 - [Infrastructure Setup](#infrastructure-setup)
@@ -41,6 +42,16 @@ A production-grade agentic RAG platform for legal contract intelligence with str
 - **Layer A** — Deterministic infrastructure (NO LLM): Temporal, PostgreSQL+pgvector, FTS, S3, PDF extraction, chunking, embedding, reranking (cross-encoder), metadata filtering, Pydantic, observability.
 - **Layer B** — Agentic reasoning (LangGraph): planner, tool selection, retrieval sufficiency decisions, evidence sufficiency, analysis selection, synthesis.
 - **Layer C** — LLM inference: ALL calls through centralized `LLMClient` → OpenRouter only. No direct model provider calls from agents.
+
+---
+
+## Architecture Documents
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — full system overview and Temporal/LangGraph separation.
+- [RAG.md](RAG.md) — ingestion, chunk metadata, hybrid retrieval, reranking, and provenance.
+- [AGENTS.md](AGENTS.md) — planner, capability registry, retrieval loop, analysis, synthesis, and HITL.
+- [EVALUATION.md](EVALUATION.md) — local retrieval/generation metrics and the seed golden dataset.
+- [OBSERVABILITY.md](OBSERVABILITY.md) — Prometheus, OTel, Loki, Jaeger, and Grafana setup.
 
 ---
 

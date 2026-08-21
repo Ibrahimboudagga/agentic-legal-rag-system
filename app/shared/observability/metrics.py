@@ -219,6 +219,42 @@ agent_analysis_duration_seconds = Histogram(
     registry=REGISTRY,
 )
 
+agent_execution_count = Counter(
+    "contract_review_agent_execution_count",
+    "Agent node executions",
+    ["agent_name", "status"],
+    registry=REGISTRY,
+)
+
+agent_latency_seconds = Histogram(
+    "contract_review_agent_latency_seconds",
+    "Agent node latency",
+    ["agent_name"],
+    buckets=[0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60],
+    registry=REGISTRY,
+)
+
+retrieval_iterations_total = Counter(
+    "contract_review_retrieval_iterations_total",
+    "Retrieval loop iterations",
+    ["status"],
+    registry=REGISTRY,
+)
+
+evidence_validation_failures_total = Counter(
+    "contract_review_evidence_validation_failures_total",
+    "Evidence validation failures",
+    ["issue_type"],
+    registry=REGISTRY,
+)
+
+tool_calls_total = Counter(
+    "contract_review_tool_calls_total",
+    "Agent tool calls",
+    ["tool_name", "status"],
+    registry=REGISTRY,
+)
+
 agent_critic_approvals_total = Counter(
     "contract_review_agent_critic_approvals_total",
     "Total critic approvals",

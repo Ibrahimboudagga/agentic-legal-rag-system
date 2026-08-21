@@ -94,11 +94,18 @@ async def ingest_document(
                 "content": chunk.content,
                 "chunk_index": chunk.chunk_index,
                 "page_number": chunk.page_number,
+                "page_start": chunk.page_start,
+                "page_end": chunk.page_end,
+                "section": chunk.section,
+                "clause": chunk.clause,
+                "language": chunk.metadata.get("language", "en"),
+                "document_type": chunk.metadata.get("document_type"),
                 "content_tokens": len(chunk.content) // 4,
                 "embedding": embedding,
                 "metadata_json": json.dumps({
                     "start_char": chunk.start_char,
                     "end_char": chunk.end_char,
+                    "parent_id": chunk.parent_id,
                     **chunk.metadata,
                 }),
             }

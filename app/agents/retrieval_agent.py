@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from agents.state import AgentState
-from agents.retrieval_tools import hybrid_retrieve
+from tools.retrieval import search_hybrid
 
 from shared.observability.metrics import (
     rag_search_requests_total,
     rag_search_duration_seconds,
     rag_search_results_count,
+    retrieval_iterations_total,
+    tool_calls_total,
 )
 
 import time
@@ -20,21 +22,28 @@ async def retrieval_node(state: AgentState) -> dict:
     """
     query = state["query"]
     s3_paths = state.get("s3_paths", [])
-    sub_queries = state.get("sub_queries", [query])
+    sub_queries = state.get("retrieval_queries") or state.get("sub_queries", [query])
     retrieval_iteration = state.get("retrieval_iteration", 0)
     existing_evidence = state.get("evidence", [])
 
-    search_query = sub_queries[0] if sub_queries else query
-    if retrieval_iteration > 0 and len(sub_queries) > 1:
+    search_query = query
+    if sub_queries:
         search_query = sub_queries[min(retrieval_iteration, len(sub_queries) - 1)]
 
     start = time.monotonic()
 
-    all_results = await hybrid_retrieve(
-        query=search_query,
-        s3_paths=s3_paths if s3_paths else None,
-        top_k=10,
-    )
+    try:
+        all_results = await search_hybrid(
+            query=search_query,
+            s3_paths=s3_paths if s3_paths else None,
+            top_k=state.get("top_k", 10),
+        )
+        tool_calls_total.labels(tool_name="search_hybrid", status="success").inc()
+        retrieval_iterations_total.labels(status="success").inc()
+    except Exception:
+        tool_calls_total.labels(tool_name="search_hybrid", status="failed").inc()
+        retrieval_iterations_total.labels(status="failed").inc()
+        raise
 
     duration = time.monotonic() - start
     rag_search_requests_total.labels(search_type="hybrid").inc()
@@ -53,6 +62,10 @@ async def retrieval_node(state: AgentState) -> dict:
             "content": r.content,
             "score": r.score,
             "page_number": r.page_number,
+            "page_start": r.page_start,
+            "page_end": r.page_end,
+            "section": r.section,
+            "clause": r.clause,
             "chunk_index": r.chunk_index,
             "source": r.source,
         }

@@ -14,6 +14,7 @@ from agents.infrastructure_nodes import (
 
 # ── Agentic reasoning nodes (use LLM via centralized abstraction) ──
 from agents.planner import planner_node
+from agents.query_rewriter import query_rewrite_node
 from agents.analysis_agent import analysis_node
 from agents.comparison_agent import comparison_node
 from agents.synthesis_node import synthesis_node
@@ -27,10 +28,11 @@ def route_after_validation(state: AgentState) -> str:
     passed = validation.get("passed", True)
     needs_retrieval = state.get("needs_retrieval", False)
     attempts = state.get("validation_attempts", 0)
+    max_attempts = state.get("max_retrieval_iterations", 3)
 
     if passed:
         return "analysis"
-    if needs_retrieval and attempts < 3:
+    if needs_retrieval and attempts < max_attempts:
         return "retrieve_again"
     return "analysis"
 
@@ -63,6 +65,7 @@ def build_agent_graph() -> StateGraph:
 
     # ── Reasoning nodes ──
     graph.add_node("planner", planner_node)
+    graph.add_node("query_rewrite", query_rewrite_node)
     graph.add_node("analysis", analysis_node)
     graph.add_node("comparison", comparison_node)
     graph.add_node("synthesize", synthesis_node)
@@ -85,9 +88,11 @@ def build_agent_graph() -> StateGraph:
         route_after_validation,
         {
             "analysis": "analysis",
-            "retrieve_again": "retrieval",
+            "retrieve_again": "query_rewrite",
         },
     )
+
+    graph.add_edge("query_rewrite", "retrieval")
 
     graph.add_conditional_edges(
         "analysis",

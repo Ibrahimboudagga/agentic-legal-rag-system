@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import pytest
 
-from retrieval.hybrid_search import (
-    _reciprocal_rank_fusion,
-    HybridSearchConfig,
-)
-from retrieval.vector_store import SearchResult
+try:
+    from retrieval.hybrid_search import (
+        _reciprocal_rank_fusion,
+        HybridSearchConfig,
+    )
+    from retrieval.vector_store import SearchResult
+    HAS_PGVVECTOR = True
+except (ImportError, ModuleNotFoundError):
+    HAS_PGVVECTOR = False
+
+pytestmark = pytest.mark.skipif(not HAS_PGVVECTOR, reason="pgvector not installed")
 
 
 def test_reciprocal_rank_fusion_semantic_only():

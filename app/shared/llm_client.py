@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
-from openai import OpenAI
+from openai import AsyncOpenAI
+from pydantic import BaseModel, ValidationError
 
 from shared.config import get_llm_config
 from shared.observability.metrics import (
@@ -56,11 +55,11 @@ class LLMClient:
 
     def __init__(self):
         self._config = get_llm_config()
-        self._client: OpenAI | None = None
+        self._client: AsyncOpenAI | None = None
 
-    def _get_client(self) -> OpenAI:
+    def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
-            self._client = OpenAI(
+            self._client = AsyncOpenAI(
                 api_key=self._config.api_key,
                 base_url=self._config.base_url,
             )
@@ -81,8 +80,7 @@ class LLMClient:
 
         start = time.monotonic()
 
-        response = await asyncio.to_thread(
-            client.chat.completions.create,
+        response = await client.chat.completions.create(
             model=use_model,
             messages=[
                 {"role": "system", "content": system},
@@ -131,6 +129,7 @@ class LLMClient:
         model: str | None = None,
         max_tokens: int | None = None,
         temperature: float = 0.0,
+        response_schema: type[BaseModel] | None = None,
     ) -> dict:
         """Send a completion request and parse the response as JSON.
 
@@ -139,9 +138,32 @@ class LLMClient:
         resp = await self.complete(prompt, system, model, max_tokens, temperature)
         try:
             from json_repair import json_repair
-            return json_repair.loads(resp.content)
+            parsed = json_repair.loads(resp.content)
         except (ImportError, Exception):
-            return resp.parse_json()
+            parsed = resp.parse_json()
+
+        if response_schema is None:
+            return parsed if isinstance(parsed, dict) else {}
+
+        try:
+            return response_schema.model_validate(parsed).model_dump()
+        except ValidationError as exc:
+            log.warning(
+                "llm_structured_output_validation_failed",
+                schema=response_schema.__name__,
+                error=str(exc),
+            )
+            return {}
+
+    def model_for(self, operation: str) -> str:
+        """Resolve task-specific model routing from configuration."""
+        return {
+            "planner": self._config.planner_model,
+            "query_rewrite": self._config.query_rewrite_model,
+            "validator": self._config.validator_model,
+            "analysis": self._config.analysis_model,
+            "synthesis": self._config.synthesis_model,
+        }.get(operation, self._config.model)
 
 
 _llm_client: LLMClient | None = None

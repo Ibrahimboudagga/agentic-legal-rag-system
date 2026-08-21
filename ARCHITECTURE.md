@@ -517,6 +517,19 @@ All env vars are read through frozen dataclasses in `shared/config.py`.
 
 ## Design Decisions & Rationale
 
+### Current production hardening updates
+
+The active agentic path now adds several guardrails required for production RAG:
+
+- LLM model routing is centralized in `shared/config.py` and `shared/llm_client.py` for planner, query rewriting, validation, analysis, and synthesis tasks.
+- `shared/llm_client.py` uses the OpenRouter OpenAI-compatible async client and validates structured outputs with Pydantic schemas where available.
+- `ingestion/embedder.py` exposes an `EmbeddingProvider` protocol with a local Sentence Transformers implementation.
+- `ingestion/chunker.py` preserves inferred section, clause, page, and parent metadata for legal citations.
+- `tools/retrieval.py` and `retrieval/service.py` provide the active tool/service/repository boundary so agents do not directly manipulate PostgreSQL.
+- LangGraph validation failures route through a query rewrite node before another retrieval pass, subject to the configured maximum retrieval iterations.
+- Final synthesis filters citations against retrieved evidence IDs to avoid application-level fabricated citations.
+- Local evaluation primitives live in `app/evaluation/` with seed golden examples in `app/evaluation/datasets/`.
+
 ### Why strict three-layer separation?
 Deterministic infrastructure (Layer A) must be fully testable without LLM calls. Agentic reasoning (Layer B) is the only place LLMs are used, making it easy to swap models or add caching. LLM inference (Layer C) is centralized for consistent retry, cost tracking, and model switching.
 

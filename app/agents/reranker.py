@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 
 from agents.state import RerankedChunk, UnifiedRetrievalResult
@@ -16,9 +15,9 @@ def _get_cross_encoder():
     """
     from sentence_transformers import CrossEncoder
 
-    model_name = os.getenv(
-        "RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    )
+    from shared.config import get_rag_config
+
+    model_name = get_rag_config().reranker_model
     return CrossEncoder(model_name)
 
 
@@ -55,6 +54,10 @@ def rerank_chunks(
                 rerank_score=float(score),
                 source=chunk.source,
                 page_number=chunk.page_number,
+                page_start=chunk.page_start,
+                page_end=chunk.page_end,
+                section=chunk.section,
+                clause=chunk.clause,
                 chunk_index=chunk.chunk_index,
             )
         )
