@@ -36,6 +36,8 @@ The core promise is simple: legal conclusions should be traceable to contract ev
 - Local cross-encoder reranking.
 - LangGraph planner, retrieval, validation, analysis, comparison, and synthesis flow.
 - Query rewriting when evidence validation fails.
+- Planner-selected analysis capabilities for clause-specific reasoning.
+- Persistence of agent evidence, citations, and analysis results.
 - Centralized OpenRouter LLM client using the OpenAI-compatible SDK.
 - Configurable model routing for planner, rewrite, validator, analysis, and synthesis tasks.
 - Temporal workflows for durable execution and human-in-the-loop review.
@@ -164,6 +166,7 @@ agentic-legal-rag-system/
 │   │   ├── retrieval_agent.py          # retrieval node using tool layer
 │   │   ├── infrastructure_nodes.py     # rerank, evidence build, validation
 │   │   ├── analysis_agent.py           # evidence-grounded legal analysis
+│   │   ├── analysis_capabilities.py    # planner-selected analysis instructions
 │   │   ├── comparison_agent.py         # cross-contract comparison
 │   │   ├── synthesis_node.py           # final structured report
 │   │   ├── capability_registry.py      # scalable agent capability registry
@@ -206,9 +209,13 @@ agentic-legal-rag-system/
 │   │   ├── s3.py                       # S3 URI/client helpers
 │   │   └── observability/              # metrics, tracing, logging, middleware
 │   │
+│   ├── repositories/
+│   │   └── review_results.py           # persistence for evidence/results/citations
+│   │
 │   └── evaluation/
 │       ├── retrieval.py                # Recall@K, Precision@K, MRR, NDCG
 │       ├── generation.py               # citation correctness, groundedness
+│       ├── run_evaluation.py           # saved-output evaluation runner
 │       └── datasets/
 │
 ├── samples-server/compose/             # Docker Compose infrastructure
@@ -373,9 +380,10 @@ The initial evaluation framework is local and deterministic:
 
 - retrieval metrics in [app/evaluation/retrieval.py](app/evaluation/retrieval.py)
 - generation/citation metrics in [app/evaluation/generation.py](app/evaluation/generation.py)
+- saved-output runner in [app/evaluation/run_evaluation.py](app/evaluation/run_evaluation.py)
 - golden examples in [app/evaluation/datasets/golden_contract_questions.jsonl](app/evaluation/datasets/golden_contract_questions.jsonl)
 
-It currently provides primitives rather than a full end-to-end evaluation runner. That keeps evaluation lightweight while the system is still evolving.
+It evaluates saved retrieval/report outputs rather than bootstrapping the full Temporal and database stack.
 
 ## Documentation Map
 
@@ -391,7 +399,7 @@ It currently provides primitives rather than a full end-to-end evaluation runner
 
 - The structure-aware chunker infers sections and clauses heuristically from Markdown. It is useful, but it is not a full legal clause parser.
 - End-to-end execution requires PostgreSQL/pgvector, Temporal, S3-compatible storage, OpenRouter credentials, and installed Python dependencies.
-- Evaluation has metric primitives and seed data, but not yet a one-command E2E evaluation runner.
+- Evaluation has deterministic metrics, seed data, and a saved-output runner, but not yet a one-command E2E stack runner.
 - Some legacy PDF extraction modules remain for backward compatibility.
 
 ## License

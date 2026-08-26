@@ -120,9 +120,13 @@ class ValidationResult:
     passed: bool
     coverage_score: float
     consistency_score: float
+    needs_retrieval: bool = False
+    supported: bool = False
+    confidence: float = 0.0
+    reason: str = ""
     issues: list[ValidationIssue] = field(default_factory=list)
     suggestions: list[str] = field(default_factory=list)
-    needs_retrieval: bool = False
+    missing_information: list[str] = field(default_factory=list)
 
 
 # ── Agent Outputs ─────────────────────────────────────────────────

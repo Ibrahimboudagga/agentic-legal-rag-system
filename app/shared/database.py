@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.ext.asyncio import (
@@ -48,6 +49,53 @@ class Document(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")
+    sections = relationship("Section", back_populates="document", cascade="all, delete-orphan")
+    clauses = relationship("Clause", back_populates="document", cascade="all, delete-orphan")
+
+
+class Section(Base):
+    __tablename__ = "sections"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    document_id = Column(String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(255), nullable=False)
+    page_start = Column(Integer, nullable=True)
+    page_end = Column(Integer, nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    document = relationship("Document", back_populates="sections")
+    clauses = relationship("Clause", back_populates="section", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "title", name="uq_sections_document_title"),
+        Index("ix_sections_document_id", "document_id"),
+        Index("ix_sections_title", "title"),
+    )
+
+
+class Clause(Base):
+    __tablename__ = "clauses"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    document_id = Column(String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    section_id = Column(String(36), ForeignKey("sections.id", ondelete="SET NULL"), nullable=True)
+    clause_number = Column(String(64), nullable=False)
+    title = Column(String(255), nullable=True)
+    page_start = Column(Integer, nullable=True)
+    page_end = Column(Integer, nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    document = relationship("Document", back_populates="clauses")
+    section = relationship("Section", back_populates="clauses")
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "clause_number", name="uq_clauses_document_number"),
+        Index("ix_clauses_document_id", "document_id"),
+        Index("ix_clauses_section_id", "section_id"),
+        Index("ix_clauses_clause_number", "clause_number"),
+    )
 
 
 class Chunk(Base):
@@ -55,6 +103,8 @@ class Chunk(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     document_id = Column(String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    section_id = Column(String(36), ForeignKey("sections.id", ondelete="SET NULL"), nullable=True)
+    clause_id = Column(String(36), ForeignKey("clauses.id", ondelete="SET NULL"), nullable=True)
     chunk_index = Column(Integer, nullable=False)
     content = Column(Text, nullable=False)
     content_tokens = Column(Integer, nullable=False, default=0)
@@ -73,10 +123,84 @@ class Chunk(Base):
 
     __table_args__ = (
         Index("ix_chunks_document_id", "document_id"),
+        Index("ix_chunks_section_id", "section_id"),
+        Index("ix_chunks_clause_id", "clause_id"),
         Index("ix_chunks_page_number", "page_number"),
         Index("ix_chunks_section", "section"),
         Index("ix_chunks_clause", "clause"),
         Index("ix_chunks_language", "language"),
+    )
+
+
+class EmbeddingRecord(Base):
+    __tablename__ = "embeddings"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    chunk_id = Column(String(36), ForeignKey("chunks.id", ondelete="CASCADE"), nullable=False, unique=True)
+    model = Column(String(255), nullable=False)
+    dimensions = Column(Integer, nullable=False)
+    embedding = Column(Vector(384), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (Index("ix_embeddings_chunk_id", "chunk_id"),)
+
+
+class EvidenceRecord(Base):
+    __tablename__ = "evidence"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workflow_id = Column(String(255), nullable=True)
+    document_id = Column(String(36), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    chunk_id = Column(String(36), ForeignKey("chunks.id", ondelete="SET NULL"), nullable=True)
+    citation_id = Column(Integer, nullable=False)
+    claim = Column(Text, nullable=True)
+    text_excerpt = Column(Text, nullable=False)
+    retrieval_score = Column(Float, nullable=False, default=0.0)
+    rerank_score = Column(Float, nullable=True)
+    validation_status = Column(String(32), nullable=False, default="pending")
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_evidence_workflow_id", "workflow_id"),
+        Index("ix_evidence_document_id", "document_id"),
+        Index("ix_evidence_chunk_id", "chunk_id"),
+    )
+
+
+class AnalysisResult(Base):
+    __tablename__ = "analysis_results"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workflow_id = Column(String(255), nullable=True, index=True)
+    query = Column(Text, nullable=False)
+    result_json = Column(Text, nullable=False)
+    overall_risk_level = Column(String(32), nullable=True)
+    confidence = Column(Float, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class Citation(Base):
+    __tablename__ = "citations"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workflow_id = Column(String(255), nullable=True)
+    evidence_id = Column(String(36), ForeignKey("evidence.id", ondelete="CASCADE"), nullable=True)
+    document_id = Column(String(36), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    chunk_id = Column(String(36), ForeignKey("chunks.id", ondelete="SET NULL"), nullable=True)
+    citation_id = Column(Integer, nullable=False)
+    s3_path = Column(String(512), nullable=False)
+    section = Column(String(255), nullable=True)
+    clause = Column(String(64), nullable=True)
+    page_start = Column(Integer, nullable=True)
+    page_end = Column(Integer, nullable=True)
+    excerpt = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_citations_workflow_id", "workflow_id"),
+        Index("ix_citations_document_id", "document_id"),
+        Index("ix_citations_chunk_id", "chunk_id"),
     )
 
 
@@ -176,6 +300,8 @@ async def _ensure_chunk_metadata_columns(conn) -> None:
     columns = {
         "page_start": "INTEGER",
         "page_end": "INTEGER",
+        "section_id": "VARCHAR(36)",
+        "clause_id": "VARCHAR(36)",
         "section": "VARCHAR(255)",
         "clause": "VARCHAR(64)",
         "document_type": "VARCHAR(64)",

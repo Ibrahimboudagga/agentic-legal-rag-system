@@ -29,6 +29,7 @@ async def vector_search(
             text(f"""
                 SELECT c.id AS chunk_id, c.document_id, d.s3_path, c.content,
                        c.page_number, c.page_start, c.page_end, c.section, c.clause,
+                       c.section_id, c.clause_id,
                        c.chunk_index,
                        1 - (c.embedding <=> :embedding::vector) AS similarity
                 FROM chunks c
@@ -57,6 +58,7 @@ async def keyword_search(
             text(f"""
                 SELECT c.id AS chunk_id, c.document_id, d.s3_path, c.content,
                        c.page_number, c.page_start, c.page_end, c.section, c.clause,
+                       c.section_id, c.clause_id,
                        c.chunk_index,
                        ts_rank_cd(c.search_vector, plainto_tsquery('english', :query)) AS rank
                 FROM chunks c
@@ -107,6 +109,7 @@ async def metadata_search(
             text(f"""
                 SELECT c.id AS chunk_id, c.document_id, d.s3_path, c.content,
                        c.page_number, c.page_start, c.page_end, c.section, c.clause,
+                       c.section_id, c.clause_id,
                        c.chunk_index, 1.0 AS score
                 FROM chunks c
                 JOIN documents d ON d.id = c.document_id
@@ -117,6 +120,83 @@ async def metadata_search(
             params,
         )
         return [_row_to_result(row, "metadata", float(row.score)) for row in result.fetchall()]
+
+
+async def document_search(
+    query: str,
+    s3_paths: list[str] | None,
+    top_k: int,
+) -> list[str]:
+    path_filter, params = _path_filter_sql(s3_paths)
+    params.update({"query": f"%{query}%", "limit": top_k})
+    async with get_session() as session:
+        result = await session.execute(
+            text(f"""
+                SELECT d.id
+                FROM documents d
+                WHERE (d.filename ILIKE :query OR COALESCE(d.metadata_json, '') ILIKE :query)
+                  {path_filter.replace('d.s3_path', 'd.s3_path')}
+                ORDER BY d.updated_at DESC
+                LIMIT :limit
+            """),
+            params,
+        )
+        return [row.id for row in result.fetchall()]
+
+
+async def section_search(
+    query: str,
+    document_ids: list[str],
+    top_k: int,
+) -> list[str]:
+    if not document_ids:
+        return []
+    placeholders = ", ".join(f":doc_{i}" for i in range(len(document_ids)))
+    params = {"query": f"%{query}%", "limit": top_k}
+    params.update({f"doc_{i}": doc_id for i, doc_id in enumerate(document_ids)})
+    async with get_session() as session:
+        result = await session.execute(
+            text(f"""
+                SELECT id
+                FROM sections
+                WHERE document_id IN ({placeholders})
+                  AND title ILIKE :query
+                ORDER BY page_start NULLS LAST, title
+                LIMIT :limit
+            """),
+            params,
+        )
+        return [row.id for row in result.fetchall()]
+
+
+async def hierarchical_search(
+    query: str,
+    s3_paths: list[str] | None,
+    top_k: int,
+    similarity_threshold: float,
+    ann_weight: float,
+    fts_weight: float,
+    metadata_weight: float,
+) -> list[UnifiedRetrievalResult]:
+    """Document/section/chunk retrieval for broad or exhaustive plans."""
+    document_ids = await document_search(query, s3_paths, top_k=top_k)
+    section_ids = await section_search(query, document_ids, top_k=top_k)
+    candidates = await hybrid_search(
+        query=query,
+        s3_paths=s3_paths,
+        top_k=top_k,
+        similarity_threshold=similarity_threshold,
+        ann_weight=ann_weight,
+        fts_weight=fts_weight,
+        metadata_weight=metadata_weight,
+    )
+    if not section_ids:
+        return candidates
+    section_boost = set(section_ids)
+    for candidate in candidates:
+        if candidate.metadata.get("section_id") in section_boost:
+            candidate.score += 0.05
+    return sorted(candidates, key=lambda item: item.score, reverse=True)[:top_k]
 
 
 async def hybrid_search(
@@ -185,4 +265,10 @@ def _row_to_result(row, source: str, score: float) -> UnifiedRetrievalResult:
         clause=row.clause,
         chunk_index=row.chunk_index,
         source=source,
+        metadata={
+            "section": row.section,
+            "clause": row.clause,
+            "section_id": row.section_id,
+            "clause_id": row.clause_id,
+        },
     )

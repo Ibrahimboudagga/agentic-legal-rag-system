@@ -9,8 +9,19 @@ async def search_hybrid(
     query: str,
     s3_paths: list[str] | None = None,
     top_k: int | None = None,
+    strategy: str = "focused",
 ) -> list[UnifiedRetrievalResult]:
     cfg = get_rag_config()
+    if strategy in {"broad", "exhaustive"}:
+        return await service.hierarchical_search(
+            query=query,
+            s3_paths=s3_paths,
+            top_k=top_k or cfg.retrieval_top_k,
+            similarity_threshold=cfg.similarity_threshold,
+            ann_weight=cfg.semantic_weight,
+            fts_weight=cfg.keyword_weight,
+            metadata_weight=cfg.metadata_weight,
+        )
     return await service.hybrid_search(
         query=query,
         s3_paths=s3_paths,
@@ -20,6 +31,14 @@ async def search_hybrid(
         fts_weight=cfg.keyword_weight,
         metadata_weight=cfg.metadata_weight,
     )
+
+
+async def search_hierarchical(
+    query: str,
+    s3_paths: list[str] | None = None,
+    top_k: int | None = None,
+) -> list[UnifiedRetrievalResult]:
+    return await search_hybrid(query=query, s3_paths=s3_paths, top_k=top_k, strategy="broad")
 
 
 async def search_vector(query: str, top_k: int | None = None, s3_paths: list[str] | None = None) -> list[UnifiedRetrievalResult]:

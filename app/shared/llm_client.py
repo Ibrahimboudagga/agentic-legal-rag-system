@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass
@@ -80,15 +81,33 @@ class LLMClient:
 
         start = time.monotonic()
 
-        response = await client.chat.completions.create(
-            model=use_model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=use_max_tokens,
-            temperature=temperature,
-        )
+        last_error: Exception | None = None
+        for attempt in range(1, self._config.max_retries + 1):
+            try:
+                response = await client.chat.completions.create(
+                    model=use_model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=use_max_tokens,
+                    temperature=temperature,
+                )
+                break
+            except Exception as exc:
+                last_error = exc
+                log.warning(
+                    "llm_call_retry",
+                    model=use_model,
+                    attempt=attempt,
+                    max_retries=self._config.max_retries,
+                    error=str(exc),
+                )
+                if attempt >= self._config.max_retries:
+                    raise
+                await asyncio.sleep(self._config.retry_delay_seconds * attempt)
+        else:
+            raise last_error or RuntimeError("LLM call failed without an exception")
 
         duration = time.monotonic() - start
         content = response.choices[0].message.content or ""

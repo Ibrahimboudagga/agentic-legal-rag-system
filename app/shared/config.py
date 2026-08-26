@@ -30,6 +30,8 @@ class LLMConfig:
     input_price_per_1k: float = field(default_factory=lambda: float(os.getenv("LLM_INPUT_PRICE_PER_1K_TOKENS", "0.00014")))
     output_price_per_1k: float = field(default_factory=lambda: float(os.getenv("LLM_OUTPUT_PRICE_PER_1K_TOKENS", "0.00028")))
     max_tokens: int = field(default_factory=lambda: int(os.getenv("LLM_MAX_TOKENS", "8000")))
+    max_retries: int = field(default_factory=lambda: int(os.getenv("LLM_MAX_RETRIES", "3")))
+    retry_delay_seconds: float = field(default_factory=lambda: float(os.getenv("LLM_RETRY_DELAY_SECONDS", "1.0")))
     planner_model: str = field(default_factory=lambda: os.getenv("PLANNER_MODEL", os.getenv("LLM_MODEL_NAME", "deepseek/deepseek-v4-flash")))
     query_rewrite_model: str = field(default_factory=lambda: os.getenv("QUERY_REWRITE_MODEL", os.getenv("LLM_MODEL_NAME", "deepseek/deepseek-v4-flash")))
     validator_model: str = field(default_factory=lambda: os.getenv("VALIDATOR_MODEL", os.getenv("LLM_MODEL_NAME", "deepseek/deepseek-v4-flash")))

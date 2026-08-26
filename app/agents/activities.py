@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 from temporalio import activity
 
-from shared.config import get_app_config, get_aws_config
 from shared.observability.logging import activity_type_var, get_logger
 from shared.observability.metrics import (
     active_activities,
@@ -21,7 +17,7 @@ from shared.observability.metrics import (
     rag_chunks_created_total,
 )
 from ingestion.pipeline import ingest_document, IngestionResult
-from shared.database import get_session, init_db
+from shared.database import init_db
 
 log = get_logger("agent_activities")
 
@@ -195,6 +191,23 @@ async def run_agent_graph_activity(param: RunAgentGraphInput) -> RunAgentGraphOu
         activity.heartbeat({"current_step": "running_agent_graph"})
 
         result = await graph.ainvoke(initial_state)
+        try:
+            from repositories.review_results import persist_agent_run
+
+            await persist_agent_run(
+                workflow_id=activity.info().workflow_id,
+                query=param.query,
+                analysis=result.get("analysis", {}),
+                synthesis=result.get("synthesis", {}),
+                evidence=result.get("evidence", []),
+                citations=result.get("evidence_citations", []),
+            )
+        except Exception as exc:
+            log.warning(
+                "agent_graph_persistence_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
         duration = time.monotonic() - start
         activity_duration_seconds.labels(

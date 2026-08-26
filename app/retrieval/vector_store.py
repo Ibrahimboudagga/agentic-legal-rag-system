@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional
+from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared.database import Chunk, Document, get_session
+from shared.config import get_rag_config
+from shared.database import Chunk, Document, EmbeddingRecord, get_session
 
 
 @dataclass
@@ -70,8 +72,26 @@ async def store_chunks(
     """
     db_chunks = []
     for c in chunks:
+        section_id = await _get_or_create_section(
+            session,
+            document_id=document_id,
+            title=c.get("section"),
+            page_start=c.get("page_start") or c.get("page_number"),
+            page_end=c.get("page_end") or c.get("page_number"),
+        )
+        clause_id = await _get_or_create_clause(
+            session,
+            document_id=document_id,
+            section_id=section_id,
+            clause_number=c.get("clause"),
+            title=c.get("section"),
+            page_start=c.get("page_start") or c.get("page_number"),
+            page_end=c.get("page_end") or c.get("page_number"),
+        )
         chunk = Chunk(
             document_id=document_id,
+            section_id=section_id,
+            clause_id=clause_id,
             chunk_index=c["chunk_index"],
             content=c["content"],
             content_tokens=c.get("content_tokens", len(c["content"]) // 4),
@@ -88,7 +108,89 @@ async def store_chunks(
         session.add(chunk)
         db_chunks.append(chunk)
     await session.flush()
+    rag_config = get_rag_config()
+    for chunk, source in zip(db_chunks, chunks):
+        if source.get("embedding") is not None:
+            session.add(
+                EmbeddingRecord(
+                    chunk_id=chunk.id,
+                    model=rag_config.embedding_model,
+                    dimensions=len(source["embedding"]),
+                    embedding=source["embedding"],
+                )
+            )
+    await session.flush()
     return db_chunks
+
+
+async def _get_or_create_section(
+    session: AsyncSession,
+    document_id: str,
+    title: str | None,
+    page_start: int | None,
+    page_end: int | None,
+) -> str | None:
+    if not title:
+        return None
+    existing = await session.execute(
+        text("SELECT id FROM sections WHERE document_id = :document_id AND title = :title"),
+        {"document_id": document_id, "title": title},
+    )
+    row = existing.first()
+    if row:
+        return row[0]
+    result = await session.execute(
+        text("""
+            INSERT INTO sections (id, document_id, title, page_start, page_end, created_at)
+            VALUES (:id, :document_id, :title, :page_start, :page_end, now())
+            RETURNING id
+        """),
+        {
+            "document_id": document_id,
+            "id": str(uuid4()),
+            "title": title,
+            "page_start": page_start,
+            "page_end": page_end,
+        },
+    )
+    return result.scalar_one()
+
+
+async def _get_or_create_clause(
+    session: AsyncSession,
+    document_id: str,
+    section_id: str | None,
+    clause_number: str | None,
+    title: str | None,
+    page_start: int | None,
+    page_end: int | None,
+) -> str | None:
+    if not clause_number:
+        return None
+    existing = await session.execute(
+        text("SELECT id FROM clauses WHERE document_id = :document_id AND clause_number = :clause_number"),
+        {"document_id": document_id, "clause_number": clause_number},
+    )
+    row = existing.first()
+    if row:
+        return row[0]
+    result = await session.execute(
+        text("""
+            INSERT INTO clauses (id, document_id, section_id, clause_number, title, page_start, page_end, created_at)
+            VALUES (:id, :document_id, :section_id, :clause_number, :title, :page_start, :page_end, now())
+            RETURNING id
+        """),
+        {
+            "document_id": document_id,
+            "id": str(uuid4()),
+            "section_id": section_id,
+            "clause_number": clause_number,
+            "title": title,
+            "page_start": page_start,
+            "page_end": page_end,
+        },
+    )
+    return result.scalar_one()
 
 
 async def search_semantic(

@@ -37,6 +37,7 @@ async def retrieval_node(state: AgentState) -> dict:
             query=search_query,
             s3_paths=s3_paths if s3_paths else None,
             top_k=state.get("top_k", 10),
+            strategy=state.get("retrieval_strategy", "focused"),
         )
         tool_calls_total.labels(tool_name="search_hybrid", status="success").inc()
         retrieval_iterations_total.labels(status="success").inc()

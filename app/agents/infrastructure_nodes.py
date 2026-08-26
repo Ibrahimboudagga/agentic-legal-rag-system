@@ -126,6 +126,9 @@ async def evidence_validate_node(state: AgentState) -> dict:
             "passed": validation.passed,
             "coverage_score": validation.coverage_score,
             "consistency_score": validation.consistency_score,
+            "supported": validation.supported,
+            "confidence": validation.confidence,
+            "reason": validation.reason,
             "issues": [
                 {
                     "issue_type": issue.issue_type,
@@ -136,10 +139,11 @@ async def evidence_validate_node(state: AgentState) -> dict:
                 for issue in validation.issues
             ],
             "suggestions": validation.suggestions,
+            "missing_information": validation.missing_information,
             "needs_retrieval": validation.needs_retrieval,
         },
         "needs_retrieval": validation.needs_retrieval,
-        "missing_information": validation.suggestions,
+        "missing_information": validation.missing_information or validation.suggestions,
         "validation_attempts": state.get("validation_attempts", 0) + 1,
         "_evidence_store": store,
     }

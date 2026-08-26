@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from agents.analysis_capabilities import capability_instruction_block
 from agents.schemas import AnalysisSchema
 from agents.state import AgentState
 from shared.llm_client import get_llm_client
@@ -14,6 +15,7 @@ async def analysis_node(state: AgentState) -> dict:
     query = state["query"]
     evidence = state.get("evidence", [])
     analysis_focus = state.get("analysis_focus", [])
+    required_capabilities = state.get("required_capabilities", [])
 
     if not evidence:
         return {
@@ -36,6 +38,7 @@ async def analysis_node(state: AgentState) -> dict:
 
     evidence_context = "\n\n---\n\n".join(evidence_parts)
     focus_str = ", ".join(analysis_focus) if analysis_focus else "all relevant legal aspects"
+    capability_instructions = capability_instruction_block(required_capabilities)
 
     analysis = await llm.complete_json(
         prompt=f"""Analyze the following evidence in relation to the user's query.
@@ -44,6 +47,9 @@ USER QUERY:
 {query}
 
 ANALYSIS FOCUS: {focus_str}
+
+SELECTED ANALYSIS CAPABILITIES:
+{capability_instructions}
 
 VALIDATED EVIDENCE ({len(evidence)} items):
 {evidence_context}
@@ -66,7 +72,8 @@ Return a JSON object:
   "overall_risk_level": "High / Medium / Low",
   "summary": "3-5 sentence executive summary",
   "confidence": 0.0-1.0,
-  "citations_used": [1, 2, 3]
+  "citations_used": [1, 2, 3],
+  "capabilities_applied": {required_capabilities}
 }}
 """,
         system="You are a senior legal analyst. Respond with valid JSON only.",
@@ -74,5 +81,7 @@ Return a JSON object:
         max_tokens=8000,
         response_schema=AnalysisSchema,
     )
+    if required_capabilities and not analysis.get("capabilities_applied"):
+        analysis["capabilities_applied"] = required_capabilities
 
     return {"analysis": analysis}

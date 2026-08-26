@@ -28,12 +28,16 @@ def validate_evidence(
             passed=False,
             coverage_score=0.0,
             consistency_score=0.0,
+            supported=False,
+            confidence=0.0,
+            reason="No retrieved evidence is available to support the claim.",
             issues=[ValidationIssue(
                 issue_type="no_evidence",
                 description="No evidence items found for the query.",
                 severity="critical",
             )],
             suggestions=["Broaden the search query", "Check if documents are indexed"],
+            missing_information=["Any clause or section relevant to the user query"],
             needs_retrieval=True,
         )
 
@@ -102,19 +106,34 @@ def validate_evidence(
     needs_retrieval = len(critical_issues) > 0 and len(items) < min_evidence * 2
 
     suggestions = []
+    missing_information = []
     if not sufficient_count:
         suggestions.append("Retrieve more evidence")
+        missing_information.append("additional corroborating evidence")
     if coverage_score < 0.3:
         suggestions.append("Try different search terms")
+        missing_information.extend(sorted(query_keywords - evidence_words)[:5])
     if unique_sources < 2:
         suggestions.append("Search across more documents")
+        missing_information.append("evidence from additional contracts")
+
+    confidence = max(0.0, min(1.0, (coverage_score * 0.45) + (consistency_score * 0.35) + (min(avg_score, 1.0) * 0.20)))
+    supported = passed and confidence >= 0.5
+    if supported:
+        reason = f"Evidence passed sufficiency checks with coverage {coverage_score:.2f}, consistency {consistency_score:.2f}, and average relevance {avg_score:.2f}."
+    else:
+        reason = "; ".join(issue.description for issue in issues) or "Evidence did not meet support thresholds."
 
     return ValidationResult(
         passed=passed,
         coverage_score=coverage_score,
         consistency_score=consistency_score,
+        supported=supported,
+        confidence=round(confidence, 3),
+        reason=reason,
         issues=issues,
         suggestions=suggestions,
+        missing_information=missing_information,
         needs_retrieval=needs_retrieval,
     )
 
