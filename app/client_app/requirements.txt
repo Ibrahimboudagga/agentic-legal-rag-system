@@ -1,7 +1,19 @@
+# Core
 fastapi==0.115.12
 uvicorn==0.34.3
 python-dotenv==1.2.2
 temporalio>=1.29.0
+
+# Observability
 structlog>=24.1.0
 prometheus-client>=0.21.0
 python-logging-loki>=0.3.1
+
+# PostgreSQL + pgvector
+asyncpg>=0.29.0
+sqlalchemy[asyncio]>=2.0.0
+pgvector>=0.3.0
+
+# Embeddings (local, free)
+sentence-transformers>=3.0.0
+numpy>=1.26.0

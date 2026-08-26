@@ -33,6 +33,16 @@ from shared.observability.metrics import (
     human_review_timeout_total,
     active_workflows,
     active_activities,
+    rag_documents_ingested_total,
+    rag_chunks_created_total,
+    rag_search_requests_total,
+    rag_search_duration_seconds,
+    rag_search_results_count,
+    agent_analysis_requests_total,
+    agent_analysis_duration_seconds,
+    agent_critic_approvals_total,
+    agent_critic_rejections_total,
+    agent_citations_total,
 )
 from shared.observability.tracing import setup_tracing, setup_temporal_runtime
 from shared.observability.middleware import ObservabilityMiddleware

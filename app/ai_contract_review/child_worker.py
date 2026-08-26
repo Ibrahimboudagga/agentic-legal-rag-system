@@ -1,9 +1,7 @@
+from __future__ import annotations
+
 import os
-import sys
 from dataclasses import dataclass
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-
 from datetime import timedelta
 
 import json_repair
@@ -19,22 +17,27 @@ with workflow.unsafe.imports_passed_through():
         workflow_failed_total,
         workflow_started_total,
     )
-    from activities import extract_pdf, call_llm, extractpdfinput, calllminput
+    from activities import extract_pdf, call_llm, ExtractPDFInput, CallLLMInput
     import prompts
 
 log = get_logger("child_workflow")
 
 
 @dataclass
-class pdfsummaryinput:
+class PdfSummaryInput:
     s3_pdf_path: str
 
 
 @dataclass
-class pdfsummaryoutput:
+class PdfSummaryOutput:
     s3_md_path: str
     summary: str
     key_risks: str
+
+
+# Backward-compatible aliases
+pdfsummaryinput = PdfSummaryInput
+pdfsummaryoutput = PdfSummaryOutput
 
 
 DEFAULT_RETRY_POLICY = RetryPolicy(
@@ -48,7 +51,7 @@ DEFAULT_RETRY_POLICY = RetryPolicy(
 @workflow.defn
 class pdfsummaryworkflow:
     @workflow.run
-    async def run(self, param: pdfsummaryinput) -> pdfsummaryoutput:
+    async def run(self, param: PdfSummaryInput) -> PdfSummaryOutput:
         start_time = workflow.now().timestamp()
         info = workflow.info()
 
@@ -70,7 +73,7 @@ class pdfsummaryworkflow:
             extract_start = workflow.now().timestamp()
             extract_md = await workflow.execute_activity(
                 extract_pdf,
-                extractpdfinput(s3_path=param.s3_pdf_path),
+                ExtractPDFInput(s3_path=param.s3_pdf_path),
                 retry_policy=DEFAULT_RETRY_POLICY,
                 start_to_close_timeout=timedelta(minutes=20),
                 heartbeat_timeout=timedelta(seconds=120),
@@ -87,7 +90,7 @@ class pdfsummaryworkflow:
             llm_start = workflow.now().timestamp()
             llm_call = await workflow.execute_activity(
                 call_llm,
-                calllminput(
+                CallLLMInput(
                     prompt=prompts._SUMMARY_PROMPT.format(
                         text=extract_md.markdown_txt[:5_000]
                     ),
@@ -99,10 +102,7 @@ class pdfsummaryworkflow:
             llm_duration = workflow.now().timestamp() - llm_start
 
             parsed_output = json_repair.loads(llm_call.response)
-            if hasattr(extract_md, "s3_md_path"):
-                s3_md_path = extract_md.s3_md_path
-            else:
-                s3_md_path = extract_md.s3_path
+            s3_md_path = extract_md.s3_md_path
 
             duration = workflow.now().timestamp() - start_time
             with workflow.unsafe.sandbox_unrestricted():
@@ -123,7 +123,7 @@ class pdfsummaryworkflow:
                 pages=extract_md.pages_num,
             )
 
-            return pdfsummaryoutput(
+            return PdfSummaryOutput(
                 s3_md_path=s3_md_path,
                 summary=parsed_output.get("summary", "No summary provided"),
                 key_risks=parsed_output.get("key_risks", "No key risks identified"),

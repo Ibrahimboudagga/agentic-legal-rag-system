@@ -1,52 +1,30 @@
-FROM sweb.base.py.x86_64:latest
+FROM python:3.11-slim
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
 
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
         build-essential \
         gcc \
-        git \
         libffi-dev \
         libssl-dev \
         pkg-config \
         python3-dev && \
     rm -rf /var/lib/apt/lists/*
 
-RUN /opt/miniconda3/bin/conda create -n testbed python=3.11 -y
+COPY app/ai_contract_review/requirements.txt /app/ai_contract_review/requirements.txt
+COPY app/shared/ /app/shared/
+COPY app/agents/ /app/agents/
+COPY app/ingestion/ /app/ingestion/
+COPY app/retrieval/ /app/retrieval/
+COPY app/tools/ /app/tools/
+COPY app/client_app/ /app/client_app/
 
-RUN git clone https://github.com/aio-libs/aiohttp.git /testbed
+RUN pip install --no-cache-dir -r ai_contract_review/requirements.txt
 
-WORKDIR /testbed
+EXPOSE 8080 9002
 
-RUN git config --global --add safe.directory /testbed
-
-SHELL ["conda", "run", "-n", "testbed", "/bin/bash", "-c"]
-
-RUN git submodule update --init --recursive
-
-RUN pip install --upgrade pip setuptools wheel Cython
-
-RUN pip install --no-cache-dir \
-        attrs \
-        charset-normalizer \
-        multidict \
-        yarl \
-        async-timeout \
-        frozenlist \
-        aiosignal \
-        aiohappyeyeballs
-
-RUN pip install --no-cache-dir \
-        pytest \
-        pytest-asyncio \
-        pytest-aiohttp \
-        pytest-xdist \
-        pytest-cov \
-        trustme
-
-ENV AIOHTTP_NO_EXTENSIONS=1
-
-RUN pip install --no-cache-dir -e .
-
-CMD ["conda", "run", "-n", "testbed", "python", "-m", "pytest", "-v", "-rA", "tests/test_client_functional.py", "tests/test_payload.py"]
+CMD ["python", "-m", "ai_contract_review.worker"]

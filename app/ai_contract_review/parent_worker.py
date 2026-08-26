@@ -1,10 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import os
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Optional
@@ -34,8 +32,8 @@ with workflow.unsafe.imports_passed_through():
     )
 
 with workflow.unsafe.imports_passed_through():
-    from activities import call_llm, calllminput
-    from child_worker import pdfsummaryworkflow, pdfsummaryinput
+    from activities import call_llm, CallLLMInput
+    from child_worker import pdfsummaryworkflow, PdfSummaryInput
     import prompts
 
 
@@ -43,24 +41,29 @@ log = get_logger("parent_workflow")
 
 
 @dataclass
-class ContractReviewerWorkflowinput:
+class ContractReviewerWorkflowInput:
     s3_paths: list[str]
-    max_revesion: int = 2
+    max_revision: int = 2
     child_task_queue: str = "contract-review-queue"
 
 
 @dataclass
-class ContractReviewerWorkflowoutput:
-    report: str
-    sources: str
+class ContractReviewerWorkflowOutput:
+    report: dict
+    sources: list[str]
     approved_by: str
+
+
+# Backward-compatible aliases
+ContractReviewerWorkflowinput = ContractReviewerWorkflowInput
+ContractReviewerWorkflowoutput = ContractReviewerWorkflowOutput
 
 
 @workflow.defn
 class ContractReviewerWorkflow:
     def __init__(self):
         self.status: str = "processing"
-        self.summuries: list = []
+        self.summaries: list = []
         self.report: str = ""
 
         self.review_decision: Optional[str] = None
@@ -106,15 +109,15 @@ class ContractReviewerWorkflow:
             "review_decision": self.review_decision,
             "review_feedback": self.review_feedback,
             "approved_by": self.approved_by,
-            "summuries": self.summuries,
+            "summaries": self.summaries,
             "report": json.dumps(self.report, ensure_ascii=False, indent=4),
-            "sources": [s["s3_md_path"] for s in self.summuries],
+            "sources": [s["s3_md_path"] for s in self.summaries],
         }
 
     @workflow.run
     async def run(
-        self, param: ContractReviewerWorkflowinput
-    ) -> ContractReviewerWorkflowoutput:
+        self, param: ContractReviewerWorkflowInput
+    ) -> ContractReviewerWorkflowOutput:
         self._start_time = workflow.now().timestamp()
         info = workflow.info()
 
@@ -132,7 +135,7 @@ class ContractReviewerWorkflow:
             "workflow_started",
             workflow_type="ContractReviewerWorkflow",
             s3_paths_count=len(param.s3_paths),
-            max_revision=param.max_revesion,
+            max_revision=param.max_revision,
         )
 
         try:
@@ -182,8 +185,8 @@ class ContractReviewerWorkflow:
                 active_workflows.labels(workflow_type="ContractReviewerWorkflow").dec()
 
     async def _run_inner(
-        self, param: ContractReviewerWorkflowinput
-    ) -> ContractReviewerWorkflowoutput:
+        self, param: ContractReviewerWorkflowInput
+    ) -> ContractReviewerWorkflowOutput:
         self.status = "extracting"
         workflow.logger.info(f"start extracting pdfs from {param.s3_paths}")
 
@@ -201,7 +204,7 @@ class ContractReviewerWorkflow:
             *[
                 workflow.execute_child_workflow(
                     pdfsummaryworkflow.run,
-                    pdfsummaryinput(s3_pdf_path=s3_path),
+                    PdfSummaryInput(s3_pdf_path=s3_path),
                     id=f"{workflow_id}-summary-{idx}",
                     task_queue=child_task_queue,
                     parent_close_policy=ParentClosePolicy.ABANDON,
@@ -227,7 +230,7 @@ class ContractReviewerWorkflow:
                 )
             else:
                 succeeded += 1
-                self.summuries.append(
+                self.summaries.append(
                     {
                         "s3_md_path": result.s3_md_path,
                         "summary": result.summary,
@@ -242,25 +245,25 @@ class ContractReviewerWorkflow:
             total=len(param.s3_paths),
         )
 
-        if len(self.summuries) == 0:
+        if len(self.summaries) == 0:
             raise ApplicationError("no summaries generated")
 
         self.status = "synthesizing"
         synthesis_start = workflow.now().timestamp()
         workflow.logger.info(
-            f"synthesizing summaries from {len(self.summuries)} contracts"
+            f"synthesizing summaries from {len(self.summaries)} contracts"
         )
 
-        log.info("synthesis_started", contract_count=len(self.summuries))
+        log.info("synthesis_started", contract_count=len(self.summaries))
 
         llm_result = await workflow.execute_activity(
             call_llm,
-            calllminput(
+            CallLLMInput(
                 prompt=prompts._SYNTHESIS_PROMPT.format(
-                    n=len(self.summuries),
+                    n=len(self.summaries),
                     summaries="\n\n".join(
                         f"contract{i+1}:\n{s['summary']}\nkey_risk:{s['key_risks']}"
-                        for i, s in enumerate(self.summuries)
+                        for i, s in enumerate(self.summaries)
                     ),
                 )
             ),
@@ -280,7 +283,7 @@ class ContractReviewerWorkflow:
             report_keys=list(self.report.keys()),
         )
 
-        for rev in range(param.max_revesion + 1):
+        for rev in range(param.max_revision + 1):
             self.status = "human_in_loop"
             self.review_decision = None
 
@@ -291,7 +294,7 @@ class ContractReviewerWorkflow:
             log.info(
                 "human_review_started",
                 revision_round=rev + 1,
-                max_revisions=param.max_revesion,
+                max_revisions=param.max_revision,
             )
 
             try:
@@ -349,7 +352,7 @@ class ContractReviewerWorkflow:
             )
             revised_report = await workflow.execute_activity(
                 call_llm,
-                calllminput(prompt=llm_prompt),
+                CallLLMInput(prompt=llm_prompt),
                 schedule_to_close_timeout=timedelta(minutes=5),
                 heartbeat_timeout=timedelta(seconds=120),
                 start_to_close_timeout=timedelta(minutes=5),
@@ -366,8 +369,8 @@ class ContractReviewerWorkflow:
 
         self.status = "completed"
 
-        return ContractReviewerWorkflowoutput(
+        return ContractReviewerWorkflowOutput(
             report=self.report,
-            sources=[s["s3_md_path"] for s in self.summuries],
+            sources=[s["s3_md_path"] for s in self.summaries],
             approved_by=self.approved_by,
         )

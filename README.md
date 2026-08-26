@@ -1,606 +1,407 @@
-# Agentic Legal Rag System 
+# Agentic Legal RAG System
 
-A production-grade workflow orchestration system built with **Temporal** and **FastAPI** that automates PDF extraction, AI-powered contract analysis, and human-in-the-loop review processes.
+A production-oriented contract intelligence platform that combines durable workflow orchestration, agentic retrieval-augmented generation, hybrid search, local embeddings/reranking, and evidence-grounded legal analysis.
 
----
+The system is designed for legal and procurement teams that need to ask questions across one or many contracts while preserving source provenance. It avoids sending entire PDFs blindly to an LLM. Instead, it ingests documents into a searchable evidence store, retrieves relevant clauses, validates evidence, and only then asks LLM-based agents to analyze and synthesize.
 
-## Table of Contents
+## What This Project Does
 
-- [Architecture Overview](#architecture-overview)
-- [Project Structure](#project-structure)
-- [Prerequisites](#prerequisites)
-- [Infrastructure Setup (Docker)](#infrastructure-setup-docker)
-- [Environment Variables](#environment-variables)
-- [Running the Application](#running-the-application)
-- [API Endpoints](#api-endpoints)
-- [Workflow Details](#workflow-details)
-- [Temporal Workers](#temporal-workers)
-- [Testing](#testing)
+This project transforms contract review from a simple "extract PDF and summarize everything" flow into an Agentic RAG workflow:
 
----
-
-## Architecture Overview
-
-```
-┌─────────────┐     ┌──────────────┐     ┌─────────────────┐     ┌──────────────┐
-│   FastAPI   │────▶│   Temporal   │────▶│  PDF Extraction │────▶│  S3 Storage  │
-│  (Client)   │     │   Server     │     │    Worker       │     │  (iDrive E2) │
-│  Port 5000  │     │  Port 7233   │     └─────────────────┘     └──────────────┘
-└─────────────┘     └──────┬───────┘
-                           │
-                           ▼
-                    ┌─────────────────┐     ┌──────────────┐
-                    │  Contract Review│────▶│  OpenRouter   │
-                    │    Worker       │     │  (LLM API)   │
-                    │  (Parent+Child) │     └──────────────┘
-                    └─────────────────┘
-                           │
-                           ▼
-                    ┌─────────────────┐
-                    │  Temporal UI    │
-                    │  Port 8080      │
-                    └─────────────────┘
+```text
+FastAPI
+-> Temporal workflow
+-> LangGraph agent runtime
+-> Planner
+-> Hybrid retrieval tools
+-> Reranker
+-> Evidence store
+-> Evidence validator
+-> Analysis and comparison agents
+-> Evidence-grounded synthesis
+-> Durable human review
 ```
 
-**Flow:**
-1. FastAPI receives HTTP requests and starts Temporal workflows
-2. Temporal orchestrates worker execution with retries, timeouts, and visibility
-3. PDF Worker downloads PDFs from S3, converts to Markdown, uploads back
-4. Contract Review Worker uses AI (OpenRouter) to analyze contracts, synthesize reports
-5. Human-in-the-loop: reviewer can request revisions via signals/updates
-6. Temporal UI provides real-time visibility into all workflow executions
+The core promise is simple: legal conclusions should be traceable to contract evidence. If evidence is missing, the system should say so rather than inventing support.
 
----
+## Current Capabilities
 
-## Project Structure
+- PDF ingestion from S3-compatible storage.
+- PDF-to-Markdown extraction with PyMuPDF4LLM.
+- Structure-aware chunking with inferred section, clause, page, and parent metadata.
+- Local Sentence Transformers embeddings.
+- PostgreSQL storage with pgvector support.
+- PostgreSQL full-text search.
+- Hybrid retrieval using vector search, FTS, metadata filtering, and reciprocal rank fusion.
+- Local cross-encoder reranking.
+- LangGraph planner, retrieval, validation, analysis, comparison, and synthesis flow.
+- Query rewriting when evidence validation fails.
+- Planner-selected analysis capabilities for clause-specific reasoning.
+- Persistence of agent evidence, citations, and analysis results.
+- Centralized OpenRouter LLM client using the OpenAI-compatible SDK.
+- Configurable model routing for planner, rewrite, validator, analysis, and synthesis tasks.
+- Temporal workflows for durable execution and human-in-the-loop review.
+- Prometheus, OpenTelemetry, Loki, Jaeger, Grafana, and structlog observability.
+- Local evaluation primitives for retrieval and generation quality.
 
+## Architecture Principles
+
+The system intentionally separates responsibilities into three layers.
+
+### Layer A: Deterministic Infrastructure
+
+These components do not use LLM reasoning:
+
+- Temporal workflow execution
+- PostgreSQL and pgvector
+- PostgreSQL full-text search
+- S3-compatible storage
+- PDF extraction
+- chunking
+- embedding generation
+- reranking
+- metadata filtering
+- evidence accumulation
+- heuristic evidence validation
+- logging, metrics, and tracing
+
+This keeps the core retrieval and persistence behavior testable and reproducible.
+
+### Layer B: Agentic Reasoning
+
+LangGraph is used for reasoning and state transitions:
+
+- planning
+- deciding retrieval focus
+- deciding whether comparison is needed
+- validating whether evidence is sufficient
+- rewriting retrieval queries when evidence is weak
+- selecting analysis focus
+- synthesizing final reports
+
+LangGraph is not used as a durable workflow engine. It runs inside Temporal activities.
+
+### Layer C: LLM Inference
+
+All LLM calls go through:
+
+[app/shared/llm_client.py](app/shared/llm_client.py)
+
+The project uses OpenRouter through the OpenAI-compatible async SDK. Individual agents do not instantiate provider SDKs directly. This gives one place for:
+
+- API gateway configuration
+- model routing
+- token accounting
+- cost tracking
+- JSON repair
+- structured output validation
+
+No Ollama or local LLM server is required.
+
+## System Diagram
+
+```mermaid
+flowchart TD
+    User[User] --> API[FastAPI API]
+    API --> Temporal[Temporal Workflow]
+    Temporal --> Ingest[Document Ingestion Activity]
+    Temporal --> AgentActivity[Run Agent Graph Activity]
+
+    Ingest --> Extract[PyMuPDF4LLM Extraction]
+    Extract --> Chunk[Structure-Aware Chunking]
+    Chunk --> Embed[Local Embedding Provider]
+    Embed --> DB[(PostgreSQL + pgvector + FTS)]
+
+    AgentActivity --> Planner[Planner Agent]
+    Planner --> Retrieval[Retrieval Agent]
+    Retrieval --> Tools[Retrieval Tools]
+    Tools --> Vector[pgvector Search]
+    Tools --> Keyword[PostgreSQL FTS]
+    Tools --> Metadata[Metadata Filter]
+    Vector --> Fusion[RRF Fusion]
+    Keyword --> Fusion
+    Metadata --> Fusion
+    Fusion --> Rerank[Cross-Encoder Reranker]
+    Rerank --> Evidence[Evidence Store]
+    Evidence --> Validator[Evidence Validator]
+    Validator -->|insufficient| Rewrite[Query Rewrite]
+    Rewrite --> Retrieval
+    Validator -->|sufficient or max attempts| Analysis[Analysis Agent]
+    Analysis --> Compare{Multi-contract?}
+    Compare -->|yes| Comparison[Comparison Agent]
+    Compare -->|no| Synthesis[Synthesis Agent]
+    Comparison --> Synthesis
+    Synthesis --> Review[Human Review]
 ```
-temporalworkflow/
+
+## Why These Technologies
+
+| Technology | Role | Why it is used |
+|---|---|---|
+| FastAPI | HTTP API | Async Python API layer with Pydantic request validation and simple operational ergonomics. |
+| Temporal | Durable workflow engine | Contract review is long-running, failure-prone, and may wait for human review. Temporal gives retries, timeouts, signals, updates, queries, and durable state. |
+| LangGraph | Agentic state machine | Agent reasoning needs explicit state, conditional transitions, retrieval loops, and controlled graph execution. |
+| OpenRouter | LLM gateway | One OpenAI-compatible gateway for model choice, routing, and cost management. |
+| PostgreSQL | Primary storage | Stores documents, chunks, metadata, and search structures in one operational database. |
+| pgvector | Vector retrieval | Enables semantic search directly inside PostgreSQL. |
+| PostgreSQL FTS | Lexical retrieval | Legal queries often depend on exact terms such as "termination", "indemnity", or "liability cap". |
+| Sentence Transformers | Local embeddings | Avoids external embedding API cost and keeps embeddings configurable. |
+| CrossEncoder reranker | Relevance reranking | Improves evidence precision after broad hybrid retrieval. |
+| PyMuPDF4LLM | PDF extraction | Produces Markdown-like document text suitable for structural chunking. |
+| Prometheus | Metrics | Tracks workflows, activities, LLM calls, retrieval, evidence validation, and agent behavior. |
+| OpenTelemetry + Jaeger | Tracing | Follows a request through API, Temporal, LangGraph, retrieval, LLM, and synthesis. |
+| Loki + structlog | Logs | Structured JSON logs with correlation IDs and workflow metadata. |
+| Grafana | Dashboards | Visualizes metrics, traces, logs, and business health. |
+
+## Repository Layout
+
+```text
+agentic-legal-rag-system/
 ├── app/
-│   ├── client_app/                    # FastAPI HTTP server
-│   │   ├── main.py                    # API endpoints & workflow orchestration
-│   │   ├── .env                       # Client configuration
+│   ├── agents/
+│   │   ├── graph.py                    # LangGraph graph wiring
+│   │   ├── state.py                    # typed graph state and dataclasses
+│   │   ├── planner.py                  # LLM planner
+│   │   ├── query_rewriter.py           # retrieval-loop query rewrite
+│   │   ├── retrieval_agent.py          # retrieval node using tool layer
+│   │   ├── infrastructure_nodes.py     # rerank, evidence build, validation
+│   │   ├── analysis_agent.py           # evidence-grounded legal analysis
+│   │   ├── analysis_capabilities.py    # planner-selected analysis instructions
+│   │   ├── comparison_agent.py         # cross-contract comparison
+│   │   ├── synthesis_node.py           # final structured report
+│   │   ├── capability_registry.py      # scalable agent capability registry
+│   │   ├── schemas.py                  # Pydantic schemas for structured outputs
+│   │   ├── evidence_store.py           # citation and evidence accumulator
+│   │   ├── evidence_validator.py       # deterministic evidence checks
+│   │   ├── activities.py               # Temporal activities for agent/RAG flow
+│   │   ├── ingest_workflow.py          # Temporal document ingestion workflow
+│   │   └── review_workflow.py          # Temporal agent review workflow
+│   │
+│   ├── client_app/
+│   │   ├── main.py                     # FastAPI app and endpoints
 │   │   └── requirements.txt
 │   │
-│   ├── pdf_extraction_01/             # Standalone PDF pipeline (no Temporal)
-│   │   ├── process_pdf.py             # CLI-based PDF extraction
-│   │   ├── .env
+│   ├── ai_contract_review/
+│   │   ├── worker.py                   # Temporal worker registration
+│   │   ├── parent_worker.py            # legacy parent contract workflow
+│   │   ├── child_worker.py             # legacy per-contract child workflow
+│   │   ├── activities.py               # legacy extraction/LLM activities
+│   │   ├── prompts.py
 │   │   └── requirements.txt
 │   │
-│   ├── pdf_extraction_01_temporal/    # Temporal-based PDF pipeline
-│   │   ├── worker.py                  # Temporal worker entrypoint
-│   │   ├── workflow_process_pdf.py    # Workflow definition (3-step pipeline)
-│   │   ├── activities.py              # Activity implementations
-│   │   ├── helper.py                  # Dataclasses & S3 utilities
-│   │   ├── .env
-│   │   └── requirements.txt
+│   ├── ingestion/
+│   │   ├── chunker.py                  # structure-aware Markdown chunker
+│   │   ├── embedder.py                 # EmbeddingProvider and local implementation
+│   │   └── pipeline.py                 # S3 PDF -> chunks -> embeddings -> DB
 │   │
-│   └── ai_contract_review/            # AI Contract Review system
-│       ├── worker.py                  # Temporal worker entrypoint
-│       ├── parent_worker.py           # Parent workflow (orchestrator)
-│       ├── child_worker.py            # Child workflow (per-PDF summarizer)
-│       ├── activities.py              # PDF extraction & LLM call activities
-│       ├── prompts.py                 # LLM prompt templates
-│       ├── .env
-│       ├── requirements.txt
-│       └── samples/                   # Sample PDF contracts for testing
-│           ├── vendor-service-agreement.pdf
-│           ├── nda-innovate-consultpro.pdf
-│           └── software-license-globalsoft.pdf
+│   ├── retrieval/
+│   │   ├── service.py                  # retrieval service used by tools
+│   │   ├── vector_store.py             # storage and lower-level search helpers
+│   │   └── hybrid_search.py            # earlier two-source hybrid search helper
+│   │
+│   ├── tools/
+│   │   └── retrieval.py                # agent-facing retrieval tools
+│   │
+│   ├── shared/
+│   │   ├── config.py                   # centralized configuration dataclasses
+│   │   ├── database.py                 # SQLAlchemy models and DB init
+│   │   ├── llm_client.py               # centralized OpenRouter LLM client
+│   │   ├── s3.py                       # S3 URI/client helpers
+│   │   └── observability/              # metrics, tracing, logging, middleware
+│   │
+│   ├── repositories/
+│   │   └── review_results.py           # persistence for evidence/results/citations
+│   │
+│   └── evaluation/
+│       ├── retrieval.py                # Recall@K, Precision@K, MRR, NDCG
+│       ├── generation.py               # citation correctness, groundedness
+│       ├── run_evaluation.py           # saved-output evaluation runner
+│       └── datasets/
 │
-├── samples-server/                    # Temporal Docker Compose configs
-│   └── compose/
-│       ├── docker-compose-postgres.yml  # Primary: PostgreSQL + Temporal
-│       ├── docker-compose-dev.yml       # Development setup
-│       ├── .env                         # Docker image versions
-│       └── scripts/                     # DB setup scripts
-│
-├── services/
-│   └── temporal.service              # systemd unit (optional)
-│
-└── Dockerfile                        # (unrelated - aiohttp test infra)
+├── samples-server/compose/             # Docker Compose infrastructure
+├── tests/                              # unit tests
+├── README.md                           # this file
+├── RUN.md                              # detailed local runbook
+├── ARCHITECTURE.md                     # extended architecture reference
+├── RAG.md                              # RAG-specific design
+├── AGENTS.md                           # agent flow and state design
+├── EVALUATION.md                       # evaluation design
+└── OBSERVABILITY.md                    # observability reference
 ```
 
----
+## Main Workflows
 
-## Prerequisites
+### Document Ingestion
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Python | 3.11+ | Runtime |
-| Docker Desktop | Latest | Temporal server & infrastructure |
-| pip | Latest | Python package management |
-
-**Python Dependencies:**
-- `fastapi`, `uvicorn` — HTTP server
-- `temporalio` — Temporal Python SDK
-- `boto3` — AWS S3 client
-- `pymupdf4llm` — PDF to Markdown extraction
-- `openai` — LLM API client (OpenRouter)
-- `json-repair` — Robust JSON parsing from LLM output
-- `python-dotenv` — Environment variable management
-
----
-
-## Infrastructure Setup (Docker)
-
-### Start Temporal Server
-
-```bash
-cd samples-server/compose
-docker compose -f docker-compose-postgres.yml up -d
+```text
+S3 PDF
+-> download to temp storage
+-> PyMuPDF4LLM extraction
+-> Markdown text
+-> structure-aware chunking
+-> local embeddings
+-> PostgreSQL documents/chunks tables
+-> pgvector and FTS searchable evidence
 ```
 
-This starts:
-- **PostgreSQL** on port `5432`
-- **Temporal Server** on port `7233`
-- **Temporal UI** on port `8080`
-- **Admin Tools** (runs setup then exits)
+The ingestion path stores chunk-level provenance. The target citation fields are:
 
-### Verify Infrastructure
+- document ID
+- S3 path
+- chunk ID
+- section
+- clause
+- page number
+- page start/end
+- source tool
+- retrieval/rerank score
 
-```bash
-# Check all containers are running
-docker ps
+### Agentic Review
 
-# Expected output:
-# temporal-postgresql    (port 5432)
-# temporal              (port 7233)
-# temporal-ui           (port 8080)
+```text
+User query
+-> planner creates objective, subqueries, capabilities, comparison flag
+-> retrieval agent calls hybrid retrieval tools
+-> candidates are fused and reranked
+-> evidence is accumulated and validated
+-> weak evidence triggers query rewriting and another retrieval pass
+-> analysis agent produces cited legal findings
+-> comparison agent runs when multiple contracts are in scope
+-> synthesis agent produces a structured final report
+-> Temporal waits for human approval or revision
 ```
 
-### Access Temporal UI
+Maximum retrieval iterations are controlled by `MAX_RETRIEVAL_ITERATIONS`.
 
-Open [http://localhost:8080](http://localhost:8080) in your browser.
+### Human Review
 
-### Stop Infrastructure
+Human review is implemented with Temporal workflow signals, updates, and queries. It is durable, so the application can wait for review without holding an in-memory request open.
 
-```bash
-docker compose -f docker-compose-postgres.yml down
-```
+Review decisions:
 
-### Optional: systemd Service (Linux)
+- assign reviewer
+- approve report
+- request revision with feedback
 
-```bash
-sudo cp services/temporal.service /etc/systemd/system/
-sudo systemctl enable temporal
-sudo systemctl start temporal
-```
+On revision, the workflow reruns the agent graph with the reviewer feedback included in the query context.
 
----
+## API Overview
 
-## Environment Variables
+### Health
 
-Each sub-application has its own `.env` file. Below are the required variables:
-
-### Client App (`app/client_app/.env`)
-
-```env
-TEMPORAL_HOST=localhost:7233
-TEMPORAL_NAMESPACE=default
-TEMPORAL_PDF_PROCESS_TASK_QUEUE=pdf-pipeline-queue
-TEMPORAL_CONTRACT_REVIEW_TASK_QUEUE=contract-review-queue
-S3_BUCKET=temporal
-```
-
-### PDF Extraction Worker (`app/pdf_extraction_01_temporal/.env`)
-
-```env
-# S3 Storage
-AWS_ACCESS_KEY_ID=<your-access-key>
-AWS_SECRET_ACCESS_KEY=<your-secret-key>
-AWS_REGION=us-west-2
-AWS_S3_ENDPOINT_URL=https://s3.us-west-2.idrivee2.com
-S3_BUCKET=temporal
-TEMP_DIR=/tmp/pdf-pipeline
-
-# Temporal
-TEMPORAL_HOST=localhost:7233
-TEMPORAL_NAMESPACE=default
-TEMPORAL_PDF_PROCESS_TASK_QUEUE=pdf-pipeline-queue
-```
-
-### Contract Review Worker (`app/ai_contract_review/.env`)
-
-```env
-# LLM API (OpenRouter)
-OPENROUTER_API_KEY=<your-openrouter-key>
-OPENROUTER_MODEL=deepseek/deepseek-v4-flash
-
-# S3 Storage
-AWS_ACCESS_KEY_ID=<your-access-key>
-AWS_SECRET_ACCESS_KEY=<your-secret-key>
-AWS_REGION=us-west-2
-AWS_S3_ENDPOINT_URL=https://s3.us-west-2.idrivee2.com
-S3_BUCKET=temporal
-TEMP_DIR=/tmp/pdf-pipeline
-
-# Temporal
-TEMPORAL_HOST=localhost:7233
-TEMPORAL_NAMESPACE=default
-TEMPORAL_PDF_PROCESS_TASK_QUEUE=pdf-pipeline-queue
-TEMPORAL_CONTRACT_REVIEW_TASK_QUEUE=contract-review-queue
-```
-
----
-
-## Running the Application
-
-### 1. Start Temporal Server
-
-```bash
-cd samples-server/compose
-docker compose -f docker-compose-postgres.yml up -d
-```
-
-### 2. Start Workers (each in a separate terminal)
-
-```bash
-# Terminal 1: PDF Extraction Worker
-cd app/pdf_extraction_01_temporal
-pip install -r requirements.txt
-python worker.py
-
-# Terminal 2: Contract Review Worker
-cd app/ai_contract_review
-pip install -r requirements.txt
-python worker.py
-```
-
-### 3. Start FastAPI Server
-
-```bash
-# Terminal 3: FastAPI Client
-cd app/client_app
-pip install -r requirements.txt
-uvicorn main:app --reload --port 5000
-```
-
-### 4. Verify Everything is Running
-
-```bash
-# Health check
-curl http://localhost:5000/health
-# Expected: {"status":"ok"}
-
-# Check Temporal UI
-# Open http://localhost:8080
-```
-
----
-
-## API Endpoints
-
-### Health Check
-
-```
+```http
 GET /health
 ```
 
-**Response:**
-```json
-{"status": "ok"}
+### Ingest Document
+
+```http
+POST /ingest
 ```
 
----
-
-### PDF Extraction (Standalone Pipeline)
-
-#### Execute and Wait
-
-```
-POST /process_pdf/execute
-Content-Type: application/json
-
-{
-  "s3_path": "s3://temporal/document.pdf"
-}
-```
-
-#### Start (Async)
-
-```
-POST /process_pdf/start
-Content-Type: application/json
-
-{
-  "s3_path": "s3://temporal/document.pdf"
-}
-```
-
-**Response:**
 ```json
 {
-  "workflow_id": "pdf-pipeline-<uuid>",
-  "response": null
+  "s3_path": "s3://temporal/vendor-service-agreement.pdf",
+  "batch_size": 2,
+  "max_chunk_tokens": 512
 }
 ```
 
-#### Check Status
+### Start Agentic RAG Review
 
-```
-GET /workflow/status/{workflow_id}
+```http
+POST /agent-review/start
 ```
 
-**Response:**
 ```json
 {
-  "status": "COMPLETED",
-  "workflow_id": "pdf-pipeline-<uuid>",
-  "result": {
-    "s3_markdown_path": "s3://temporal/document.md"
-  }
-}
-```
-
----
-
-### AI Contract Review
-
-#### Start Review
-
-```
-POST /contract-review/start
-Content-Type: application/json
-
-{
+  "query": "Which contracts allow unilateral termination with less than 30 days notice?",
   "s3_paths": [
-    "s3://temporal/contract1.pdf",
-    "s3://temporal/contract2.pdf",
-    "s3://temporal/contract3.pdf"
+    "s3://temporal/vendor-service-agreement.pdf",
+    "s3://temporal/nda-innovate-consultpro.pdf",
+    "s3://temporal/software-license-globalsoft.pdf"
   ],
-  "max_revesion": 2
+  "top_k": 8
 }
 ```
 
-**Response:**
-```json
-{
-  "workflow_id": "contract-review-<uuid>"
-}
+### Query Agentic Review
+
+```http
+GET /agent-review/{workflow_id}/status
+GET /agent-review/{workflow_id}/report
 ```
 
-#### Check Status
+### Legacy Contract Review
 
-```
+```http
+POST /contract-review/start
 GET /contract-review/{workflow_id}/status
-```
-
-**Response:**
-```json
-{
-  "workflow_id": "contract-review-<uuid>",
-  "desc_status": "RUNNING",
-  "workflow_status": {
-    "status": "human_in_loop",
-    "review_decision": null,
-    "review_feedback": "",
-    "approved_by": ""
-  }
-}
-```
-
-#### Get Full Report
-
-```
 GET /contract-review/{workflow_id}/report
-```
-
-**Response includes:**
-- `overall_risk_level` — High/Medium/Low assessment
-- `top_cross_contract_risks` — Cross-contract risk patterns
-- `recommended_actions` — Actionable steps for the legal team
-- `summuries` — Individual contract summaries with key risks
-- `sources` — List of analyzed S3 document paths
-
-#### Assign Reviewer (Signal)
-
-```
 POST /contract-review/{workflow_id}/post_reviewer
-Content-Type: application/json
-
-{
-  "name": "ibrahim"
-}
-```
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "message": "reviewer assigned to ibrahim"
-}
-```
-
-#### Submit Revision (Update)
-
-```
 POST /contract-review/{workflow_id}/revise
-Content-Type: application/json
-
-{
-  "feedback": "Please write the report in Arabic."
-}
-```
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "message": "decision revise recorded"
-}
-```
-
-#### Approve Report (Update)
-
-```
 POST /contract-review/{workflow_id}/approve
 ```
 
-**Response:**
-```json
-{
-  "status": "ok",
-  "message": "decision approved recorded"
-}
-```
+## Configuration
 
----
+The main environment variables are defined in [.env.example](.env.example).
 
-## Workflow Details
+Important groups:
 
-### PDF Extraction Workflow (`pdfpipelineworkflow`)
+- Temporal: `TEMPORAL_HOST`, `TEMPORAL_NAMESPACE`, task queues.
+- Storage: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_S3_ENDPOINT_URL`, `S3_BUCKET`.
+- Database: `DATABASE_URL`, `DATABASE_SYNC_URL`, `DB_POOL_SIZE`, `EMBEDDING_DIM`.
+- LLM: `OPENROUTER_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL_NAME`, token prices.
+- Model routing: `PLANNER_MODEL`, `QUERY_REWRITE_MODEL`, `VALIDATOR_MODEL`, `ANALYSIS_MODEL`, `SYNTHESIS_MODEL`.
+- RAG: `EMBEDDING_MODEL`, `RERANKER_MODEL`, `TOP_K_RETRIEVAL`, `TOP_K_RERANK`, `MAX_RETRIEVAL_ITERATIONS`.
+- Observability: `OTEL_ENDPOINT`, `LOKI_URL`, `APP_NAME`, `ENVIRONMENT`, metrics ports.
 
-A simple 3-step sequential pipeline:
+## Observability
 
-```
-Download from S3 ──▶ Extract to Markdown ──▶ Upload to S3
-```
+The system exposes and records:
 
-| Step | Activity | Timeout | Retry |
-|------|----------|---------|-------|
-| 1 | `download_from_s3` | 1 min | 5 attempts |
-| 2 | `extract_to_markdown` | 1 min | 5 attempts |
-| 3 | `upload_markdown_to_s3` | 1 min | 5 attempts |
+- workflow started/completed/failed counts
+- workflow duration
+- activity duration and failures
+- LLM request count, duration, tokens, and estimated cost
+- document ingestion and chunk counts
+- RAG search request count, latency, and result counts
+- retrieval iteration counts
+- evidence validation failures
+- agent execution and latency metrics
+- human review approvals, revisions, and timeouts
 
-### Contract Review Workflow (`ContractReviewerWorkflow`)
+Operational dashboards are documented in [OBSERVABILITY.md](OBSERVABILITY.md).
 
-A sophisticated parent workflow with child workflows and human-in-the-loop:
+## Evaluation
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                    Parent Workflow                            │
-│                                                              │
-│  1. EXTRACTING: Fan-out to child workflows (parallel)        │
-│     ├── Child 1: Download PDF → Extract → Summarize (LLM)   │
-│     ├── Child 2: Download PDF → Extract → Summarize (LLM)   │
-│     └── Child 3: Download PDF → Extract → Summarize (LLM)   │
-│                                                              │
-│  2. SYNTHESIZING: Combine summaries into cross-contract      │
-│     risk report (LLM)                                        │
-│                                                              │
-│  3. HUMAN-IN-THE-LOOP: Wait for reviewer decision            │
-│     ├── APPROVE → Complete                                   │
-│     └── REVISE → Re-run LLM with feedback (up to N times)   │
-│                                                              │
-│  4. COMPLETED: Return final report                           │
-└──────────────────────────────────────────────────────────────┘
-```
+The initial evaluation framework is local and deterministic:
 
-**Temporal Features Used:**
-- **Child Workflows** — Parallel PDF processing with `ParentClosePolicy.ABANDON`
-- **Signals** — `assign_reviewer` to set reviewer name
-- **Updates** — `submit_decision` for approve/revise with validation
-- **Queries** — `query_status` and `query_fullreport` for real-time state
-- **Activities** — PDF extraction and LLM calls with heartbeats
-- **Retry Policies** — Configurable backoff for transient failures
-- **Timeouts** — `schedule_to_close_timeout`, `start_to_close_timeout`, `heartbeat_timeout`
+- retrieval metrics in [app/evaluation/retrieval.py](app/evaluation/retrieval.py)
+- generation/citation metrics in [app/evaluation/generation.py](app/evaluation/generation.py)
+- saved-output runner in [app/evaluation/run_evaluation.py](app/evaluation/run_evaluation.py)
+- golden examples in [app/evaluation/datasets/golden_contract_questions.jsonl](app/evaluation/datasets/golden_contract_questions.jsonl)
 
----
+It evaluates saved retrieval/report outputs rather than bootstrapping the full Temporal and database stack.
 
-## Temporal Workers
+## Documentation Map
 
-### PDF Extraction Worker
+- [RUN.md](RUN.md) — detailed setup and run instructions.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — deeper architecture and technology reference.
+- [RAG.md](RAG.md) — ingestion, retrieval, reranking, and evidence provenance.
+- [AGENTS.md](AGENTS.md) — LangGraph state, planner, capability registry, retrieval loop, and synthesis.
+- [EVALUATION.md](EVALUATION.md) — evaluation metrics and dataset format.
+- [OBSERVABILITY.md](OBSERVABILITY.md) — metrics, logs, traces, and dashboards.
+- [TESTING.md](TESTING.md) — testing strategy and examples.
 
-**File:** `app/pdf_extraction_01_temporal/worker.py`
+## Current Limitations
 
-```bash
-cd app/pdf_extraction_01_temporal
-python worker.py
-```
-
-**Registers:**
-- Workflow: `pdfpipelineworkflow`
-- Activities: `download_from_s3`, `extract_to_markdown`, `upload_markdown_to_s3`
-- Task Queue: `pdf-pipeline-queue`
-
-### Contract Review Worker
-
-**File:** `app/ai_contract_review/worker.py`
-
-```bash
-cd app/ai_contract_review
-python worker.py
-```
-
-**Registers:**
-- Workflows: `ContractReviewerWorkflow`, `pdfsummaryworkflow`
-- Activities: `call_llm`, `extract_pdf`
-- Task Queue: `contract-review-queue`
-
----
-
-## Testing
-
-### Test PDF Extraction
-
-```bash
-# Single document
-curl -X POST http://localhost:5000/process_pdf/start \
-  -H "Content-Type: application/json" \
-  -d '{"s3_path": "s3://temporal/vendor-service-agreement.pdf"}'
-
-# Check status
-curl http://localhost:5000/workflow/status/pdf-pipeline-<uuid>
-```
-
-### Test Contract Review (Full Flow)
-
-```bash
-# 1. Start review with multiple contracts
-curl -X POST http://localhost:5000/contract-review/start \
-  -H "Content-Type: application/json" \
-  -d '{
-    "s3_paths": [
-      "s3://temporal/vendor-service-agreement.pdf",
-      "s3://temporal/nda-innovate-consultpro.pdf",
-      "s3://temporal/software-license-globalsoft.pdf"
-    ]
-  }'
-
-# 2. Check status (will show "extracting" → "synthesizing" → "human_in_loop")
-curl http://localhost:5000/contract-review/{workflow_id}/status
-
-# 3. Get the report
-curl http://localhost:5000/contract-review/{workflow_id}/report
-
-# 4. Assign a reviewer
-curl -X POST http://localhost:5000/contract-review/{workflow_id}/post_reviewer \
-  -H "Content-Type: application/json" \
-  -d '{"name": "ibrahim"}'
-
-# 5. Request revision
-curl -X POST http://localhost:5000/contract-review/{workflow_id}/revise \
-  -H "Content-Type: application/json" \
-  -d '{"feedback": "Please write the report in Arabic."}'
-
-# 6. Or approve the report
-curl -X POST http://localhost:5000/contract-review/{workflow_id}/approve
-```
-
-### Sample PDFs
-
-Test documents are available in `app/ai_contract_review/samples/`:
-- `vendor-service-agreement.pdf` — Cloud services retainer agreement
-- `nda-innovate-consultpro.pdf` — Non-disclosure agreement
-- `software-license-globalsoft.pdf` — Software license agreement
-
----
-
-## Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| `uvicorn not found` | Run `pip install uvicorn fastapi` in the client app directory |
-| `Could not import module "main"` | Ensure you're running from `app/client_app/` directory |
-| Worker not picking up tasks | Verify worker is running and Temporal server is accessible on `localhost:7233` |
-| S3 connection errors | Check AWS credentials and endpoint URL in `.env` |
-| LLM errors | Verify `OPENROUTER_API_KEY` is valid and model is available |
-| Docker containers not starting | Run `docker compose down` then `docker compose up -d` again |
-| Port conflicts | Ensure ports 5000, 7233, 8080, 5432 are available |
-
----
+- The structure-aware chunker infers sections and clauses heuristically from Markdown. It is useful, but it is not a full legal clause parser.
+- End-to-end execution requires PostgreSQL/pgvector, Temporal, S3-compatible storage, OpenRouter credentials, and installed Python dependencies.
+- Evaluation has deterministic metrics, seed data, and a saved-output runner, but not yet a one-command E2E stack runner.
+- Some legacy PDF extraction modules remain for backward compatibility.
 
 ## License
 
-Internal project — not licensed for distribution.
+Internal project. Not licensed for external distribution unless a license is added.
